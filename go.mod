@@ -1,4 +1,4 @@
-module github.com/shipa988/game
+module github.com/shipa988/ebitentest
 
 go 1.13
 
