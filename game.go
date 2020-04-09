@@ -1,6 +1,10 @@
 package game
 
 import (
+	"bytes"
+	"github.com/hajimehoshi/ebiten/examples/resources/images"
+	"log"
+
 	//"bytes"
 	"image"
 	_ "image/png"
@@ -42,7 +46,7 @@ func Update(screen *ebiten.Image) error {
 	return nil
 }
 
-/*func main() {
+func init() {
 	// Decode image from a byte slice instead of a file so that
 	// this example works in any working directory.
 	// If you want to use a file, there are some options:
@@ -57,8 +61,4 @@ func Update(screen *ebiten.Image) error {
 		log.Fatal(err)
 	}
 	runnerImage, _ = ebiten.NewImageFromImage(img, ebiten.FilterDefault)
-
-	if err := ebiten.Run(Update, screenWidth, screenHeight, 2, "Animation (Ebiten Demo)"); err != nil {
-		log.Fatal(err)
-	}
-}*/
+}
