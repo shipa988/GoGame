@@ -1,5 +1,3 @@
-
-
 package game
 
 import (
@@ -28,7 +26,7 @@ var (
 	runnerImage *ebiten.Image
 )
 
-func update(screen *ebiten.Image) error {
+func Update(screen *ebiten.Image) error {
 	count++
 
 	if ebiten.IsDrawingSkipped() {
