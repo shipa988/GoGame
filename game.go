@@ -1,18 +1,18 @@
-package game
+package main
 
 import (
-
+	"bytes"
+	"github.com/gobuffalo/packr/v2"
 	"log"
 	"math/rand"
-	"os"
+	//"os"
 	"time"
 
+	e "github.com/hajimehoshi/ebiten"
+	//"github.com/markbates/pkger"
 	//"bytes"
 	"image"
 	"image/png"
-	e "github.com/hajimehoshi/ebiten"
-	"github.com/markbates/pkger"
-
 )
 
 const (
@@ -52,7 +52,7 @@ func Update(screen *e.Image) error {
 		Config: frames[unit.Skin+"_"+unit.Action].Config,
 	})
 	for _,sprite:=range sprites  {
-		img, err := e.NewImageFromImage(sprite.Frames[(frame/7+sprite.Frame)%4], e.FilterDefault)
+		img, err := e.NewImageFromImage(sprite.Frames[(frame/5+sprite.Frame)%4], e.FilterDefault)
 		if err != nil {
 			log.Println(err)
 			return err
@@ -95,7 +95,25 @@ func LoadResources() (map[string]Frames, error) {
 	cfgs := map[string]image.Config{}
 	sprites := map[string]Frames{}
 
-	pkger.Walk("./resources/sprites", func(path string, info os.FileInfo, err error) error {
+	imagesBox := packr.New("images", "./resources/sprites")
+
+	list := imagesBox.List()
+	for _, filename := range list {
+		data, err := imagesBox.Find(filename)
+		if err != nil {
+			return sprites, err
+		}
+		img, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			return sprites, err
+		}
+
+		cfg, err := png.DecodeConfig(bytes.NewReader(data))
+
+		images[filename] = img
+		cfgs[filename] = cfg
+	}
+	/*pkger.Walk("resources/sprites", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -112,7 +130,7 @@ func LoadResources() (map[string]Frames, error) {
 		images[info.Name()] = img
 		cfgs[info.Name()] = cfg
 		return nil
-	})
+	})*/
 
 
 	sprites["big_demon_idle"] = Frames{
@@ -228,10 +246,31 @@ func init() {
 		Action: "idle",
 		Speed:  1,
 	}
+
+
+
+}
+func main() {
+	// Decode image from a byte slice instead of a file so that
+	// this example works in any working directory.
+	// If you want to use a file, there are some options:
+	// 1) Use os.Open and pass the file to the image decoder.
+	//    This is a very regular way, but doesn't work on browsers.
+	// 2) Use ebitenutil.OpenFile and pass the file to the image decoder.
+	//    This works even on browsers.
+	// 3) Use ebitenutil.NewImageFromFile to create an ebiten.Image directly from a file.
+	//    This also works on browsers.
+	//img, _, err := image.Decode(bytes.NewReader(images.Runner_png))
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//runnerImage, _ = ebiten.NewImageFromImage(img, ebiten.FilterDefault)
 	var err error
-	frames, err =LoadResources()
-	if err != nil {
+	frames, err=LoadResources()
+	if err!= nil {
 		log.Fatal(err)
 	}
-
+	if err := e.Run(Update, screenWidth, screenHeight, 2, "Animation (Ebiten Demo)"); err != nil {
+		log.Fatal(err)
+	}
 }
