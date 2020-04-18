@@ -1,137 +1,322 @@
 package main
 
 import (
-	"bytes"
-	"github.com/gobuffalo/packr/v2"
-	"log"
-	"math/rand"
-	//"os"
-	"time"
-
+	//"bytes"
+	"flag"
+	"fmt"
 	e "github.com/hajimehoshi/ebiten"
 	//"github.com/markbates/pkger"
-	//"bytes"
+	"github.com/rakyll/statik/fs"
+	//"github.com/gobuffalo/packr/v2"
+	//"github.com/markbates/pkger"
+	"github.com/hajimehoshi/ebiten/ebitenutil"
+	_ "github.com/shipa988/ebitentest/statik" // TODO: Replace with the absolute import path
 	"image"
 	"image/png"
+	"log"
+	"math/rand"
+	"os"
+	"runtime/pprof"
+	"time"
 )
 
 const (
-	screenWidth  = 320
-	screenHeight = 240
-
-	frameOX     = 0
-	frameOY     = 32
-	frameWidth  = 32
-	frameHeight = 32
-	frameNum    = 8
+	UnitActionIdle = "idle"
+	UnitActionMove = "run"
 )
 
+type Config struct {
+	title  string
+	width  int
+	height int
+	scale  float64
+}
+type Camera struct {
+	X       float64
+	Y       float64
+	Padding float64
+}
 
-
+var config *Config
+var camera *Camera
+var levelImage *e.Image
 var frames map[string]Frames
 var frame int
 var unit *Unit
 
-func Update(screen *e.Image) error {
-	frame++
+type Direction int
 
+type Sprite struct {
+	Frames []image.Image
+	Frame  int
+	X      float64
+	Y      float64
+	Side   Direction
+	Config image.Config
+}
+type Unit struct {
+	Id        int
+	X         float64
+	Y         float64
+	Frame     int32
+	Skin      string
+	Action    string
+	Speed     float64
+	Direction Direction
+	Side      Direction
+}
+type Frames struct {
+	Frames []image.Image
+	image.Config
+}
+
+const (
+	Direction_left  Direction = 0
+	Direction_right Direction = iota
+	Direction_up
+	Direction_down
+)
+
+func Update(screen *e.Image) error {
+	handleKeyboard()
 	if e.IsDrawingSkipped() {
 		return nil
 	}
+	handleCamera(screen)
 
+	sprites := []Sprite{}
+	frame++
 	op := &e.DrawImageOptions{}
-	op.GeoM.Translate(-float64(frameWidth)/2, -float64(frameHeight)/2)
-	op.GeoM.Translate(screenWidth/2, screenHeight/2)
 
 	sprites = append(sprites, Sprite{
 		Frames: frames[unit.Skin+"_"+unit.Action].Frames,
 		Frame:  int(unit.Frame),
 		X:      unit.X,
 		Y:      unit.Y,
-		//Side:   unit.Side,
+		Side:   unit.Side,
 		Config: frames[unit.Skin+"_"+unit.Action].Config,
 	})
-	for _,sprite:=range sprites  {
-		img, err := e.NewImageFromImage(sprite.Frames[(frame/5+sprite.Frame)%4], e.FilterDefault)
+	for _, sprite := range sprites {
+
+		if sprite.Side == Direction_left {
+			op.GeoM.Scale(-1, 1)
+			op.GeoM.Translate(float64(sprite.Config.Width), 0)
+		}
+
+		op.GeoM.Translate(sprite.X-camera.X, sprite.Y-camera.Y)
+		img, err := e.NewImageFromImage(sprite.Frames[(frame/7+sprite.Frame)%4], e.FilterDefault)
 		if err != nil {
 			log.Println(err)
 			return err
 		}
-		err= screen.DrawImage(img, op)
+
+		err = screen.DrawImage(img, op)
 		if err != nil {
 			log.Println(err)
 			return err
 		}
 	}
+	ebitenutil.DebugPrint(screen, fmt.Sprintf("U.x: %0.2f U.y: %0.2f cam.x: %0.2f cam.y: %0.2f", unit.X, unit.Y, camera.X, camera.Y))
 	return nil
 }
-type Sprite struct {
-	Frames []image.Image
-	Frame  int
-	X      float64
-	Y      float64
-	//Side   game.Direction
-	Config image.Config
+
+func init() {
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+	skins := []string{"big_demon", "big_zombie", "elf_f"}
+	config = &Config{
+		title:  "Another Hero",
+		width:  720,
+		height: 480,
+		scale:  1,
+	}
+	unit = &Unit{
+		Id:        1,
+		X:         rnd.Float64()*float64(config.width-config.width/16) + 10,
+		Y:         rnd.Float64()*float64(config.height-config.height/16) + 10,
+		Frame:     int32(rnd.Intn(4)),
+		Skin:      skins[rnd.Intn(len(skins))],
+		Action:    "idle",
+		Speed:     1,
+		Direction: Direction_right,
+		Side:      Direction_right,
+	}
 }
 
-type Unit struct {
-	Id int
-	X float64
-	Y float64
-	Frame int32
-	Skin string
-	Action string
-	Speed int
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
+func main() {
+	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
+	var err error
+	frames, err = LoadResources()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	levelImage, err = prepareLevelImage()
+	camera = &Camera{
+		X:       unit.X,
+		Y:       unit.Y,
+		Padding: 30,
+	}
+	if err := e.Run(Update, config.width, config.height, config.scale, config.title); err != nil {
+		log.Fatal(err)
+	}
 }
-type Frames struct {
-	Frames []image.Image
-	image.Config
+
+func prepareLevelImage() (*e.Image, error) {
+	tileSize := config.width / 45
+	level := LoadLevel()
+	width := len(level[0])
+	height := len(level)
+	levelImage, _ := e.NewImage(width*tileSize, height*tileSize, e.FilterDefault)
+
+	for i := 0; i < width; i++ {
+		for j := 0; j < height; j++ {
+			op := &e.DrawImageOptions{}
+			op.GeoM.Translate(float64(i*tileSize), float64(j*tileSize))
+
+			img, err := e.NewImageFromImage(frames[level[j][i]].Frames[0], e.FilterDefault)
+			if err != nil {
+				log.Println(err)
+				return levelImage, err
+			}
+			err = levelImage.DrawImage(img, op)
+			if err != nil {
+				log.Println(err)
+				return levelImage, err
+			}
+		}
+	}
+
+	return levelImage, nil
 }
-var sprites []Sprite
+
+func handleCamera(screen *e.Image) {
+	if camera == nil {
+		return
+	}
+
+	player := unit
+	frame := frames[player.Skin+"_"+player.Action]
+	camera.X = player.X - float64(config.width-frame.Config.Width)/2
+	camera.Y = player.Y - float64(config.height-frame.Config.Height)/2
+
+	op := &e.DrawImageOptions{}
+	op.GeoM.Translate(-camera.X, -camera.Y)
+	screen.DrawImage(levelImage, op)
+}
+
+func handleKeyboard() {
+	//event := &game.Event{}
+	var ismove bool
+	if e.IsKeyPressed(e.KeyA) || e.IsKeyPressed(e.KeyLeft) {
+		ismove = true
+		unit.Direction = Direction_left
+		unit.Side = Direction_left
+		unit.X -= unit.Speed
+	}
+
+	if e.IsKeyPressed(e.KeyD) || e.IsKeyPressed(e.KeyRight) {
+		unit.Action = "run"
+		ismove = true
+		unit.Direction = Direction_right
+		unit.Side = Direction_right
+		unit.X += unit.Speed
+	}
+
+	if e.IsKeyPressed(e.KeyW) || e.IsKeyPressed(e.KeyUp) {
+		ismove = true
+		unit.Direction = Direction_up
+		unit.Side = unit.Side
+		unit.Y -= unit.Speed
+	}
+
+	if e.IsKeyPressed(e.KeyS) || e.IsKeyPressed(e.KeyDown) {
+		ismove = true
+		unit.Direction = Direction_down
+		unit.Side = unit.Side
+
+		unit.Y += unit.Speed
+	}
+
+	if ismove {
+		unit.Action = UnitActionMove
+		/*if prevKey != lastKey {
+			message, err := proto.Marshal(event)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			c.WriteMessage(websocket.BinaryMessage, message)
+		}*/
+	} else {
+
+		if unit.Action != UnitActionIdle {
+			unit.Action = UnitActionIdle
+		}
+		/*	event = &game.Event{
+				Type: game.Event_type_idle,
+				Data: &game.Event_Idle{
+					&game.EventIdle{PlayerId: world.MyID},
+				},
+			}
+			message, err := proto.Marshal(event)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			c.WriteMessage(websocket.BinaryMessage, message)
+			lastKey = -1
+		}*/
+	}
+
+	//prevKey = lastKey
+}
+
 func LoadResources() (map[string]Frames, error) {
 	images := map[string]image.Image{}
 	cfgs := map[string]image.Config{}
 	sprites := map[string]Frames{}
-
-	imagesBox := packr.New("images", "./resources/sprites")
-
-	list := imagesBox.List()
-	for _, filename := range list {
-		data, err := imagesBox.Find(filename)
-		if err != nil {
-			return sprites, err
-		}
-		img, err := png.Decode(bytes.NewReader(data))
-		if err != nil {
-			return sprites, err
-		}
-
-		cfg, err := png.DecodeConfig(bytes.NewReader(data))
-
-		images[filename] = img
-		cfgs[filename] = cfg
+	statikFS, err := fs.New()
+	if err != nil {
+		log.Fatal(err)
 	}
-	/*pkger.Walk("resources/sprites", func(path string, info os.FileInfo, err error) error {
+
+	fs.Walk(statikFS, "/", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		f,err:=pkger.Open(info.Name())
-		if err != nil {
-			return err
+		fmt.Println(path)
+
+		if info.IsDir() {
+			return nil
 		}
+		// Access individual files by their paths.
+		f, err := statikFS.Open(path)
+		if err != nil {
+			log.Fatal(err)
+		}
+
 		img, err := png.Decode(f)
 		if err != nil {
-			return  err
+			return err
 		}
 		cfg, err := png.DecodeConfig(f)
 
 		images[info.Name()] = img
 		cfgs[info.Name()] = cfg
+		f.Close()
 		return nil
-	})*/
-
+	})
 
 	sprites["big_demon_idle"] = Frames{
 		Frames: []image.Image{
@@ -221,56 +406,60 @@ func LoadResources() (map[string]Frames, error) {
 		Frames: []image.Image{images["floor_8.png"]},
 		Config: cfgs["floor_8.png"],
 	}
-
+	sprites["wall_side_front_left"] = Frames{
+		Frames: []image.Image{images["wall_side_front_left.png"]},
+		Config: cfgs["wall_side_front_left.png"],
+	}
+	sprites["wall_side_front_right"] = Frames{
+		Frames: []image.Image{images["wall_side_front_right.png"]},
+		Config: cfgs["wall_side_front_right.png"],
+	}
 	return sprites, nil
 }
+func LoadLevel() [][]string {
+	a := "floor_1"
+	b := "floor_2"
+	c := "floor_3"
+	d := "floor_4"
+	e := "wall_side_front_left"
+	f := "wall_side_front_right"
 
-func init() {
-	// Decode image from a byte slice instead of a file so that
-	// this example works in any working directory.
-	// If you want to use a file, there are some options:
-	// 1) Use os.Open and pass the file to the image decoder.
-	//    This is a very regular way, but doesn't work on browsers.
-	// 2) Use ebitenutil.OpenFile and pass the file to the image decoder.
-	//    This works even on browsers.
-	// 3) Use ebitenutil.NewImageFromFile to create an ebiten.Image directly from a file.
-	//    This also works on browsers.
-	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
-	skins := []string{"big_demon", "big_zombie", "elf_f"}
-	unit = &Unit{
-		Id:     1,
-		X:      rnd.Float64()*300 + 10,
-		Y:      rnd.Float64()*220 + 10,
-		Frame:  int32(rnd.Intn(4)),
-		Skin:   skins[rnd.Intn(len(skins))],
-		Action: "idle",
-		Speed:  1,
+	level := [][]string{
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, b, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, c, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, c, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, d, d, d, d, d, a, a, a, a, a, a, a, d, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
+		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
 	}
 
-
-
-}
-func main() {
-	// Decode image from a byte slice instead of a file so that
-	// this example works in any working directory.
-	// If you want to use a file, there are some options:
-	// 1) Use os.Open and pass the file to the image decoder.
-	//    This is a very regular way, but doesn't work on browsers.
-	// 2) Use ebitenutil.OpenFile and pass the file to the image decoder.
-	//    This works even on browsers.
-	// 3) Use ebitenutil.NewImageFromFile to create an ebiten.Image directly from a file.
-	//    This also works on browsers.
-	//img, _, err := image.Decode(bytes.NewReader(images.Runner_png))
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
-	//runnerImage, _ = ebiten.NewImageFromImage(img, ebiten.FilterDefault)
-	var err error
-	frames, err=LoadResources()
-	if err!= nil {
-		log.Fatal(err)
-	}
-	if err := e.Run(Update, screenWidth, screenHeight, 2, "Animation (Ebiten Demo)"); err != nil {
-		log.Fatal(err)
-	}
+	return level
 }
