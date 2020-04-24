@@ -14,10 +14,7 @@ import (
 	"runtime/pprof"
 	"time"
 )
-type Frames struct {
-	Frames []image.Image
-	image.Config
-}
+
 
 type Camera struct {
 	X       float64
@@ -128,6 +125,7 @@ func main() {
 		Y:       unit.Y,
 		Padding: 30,
 	}
+
 	if err := e.Run(Update, config.width, config.height, config.scale, config.title); err != nil {
 		log.Fatal(err)
 	}

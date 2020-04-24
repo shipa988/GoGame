@@ -1,5 +1,12 @@
+//go:generate statik -src=resources -include=*.png,*.txt,*.tmx
 package main
 
+import "image"
+
+type Frames struct {
+	Frames []image.Image
+	image.Config
+}
 const (
 	UnitActionIdle = "idle"
 	UnitActionMove = "run"

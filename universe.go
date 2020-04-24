@@ -16,7 +16,7 @@ type Universe struct {
 
 var universe *Universe
 
-func newUniverse( _width, _height int, _scale float64) *Universe {
+func newUniverse(_width, _height int, _scale float64) *Universe {
 	ws := make(map[int]*World)
 	u := Universe{
 		width:  _width,
@@ -26,12 +26,14 @@ func newUniverse( _width, _height int, _scale float64) *Universe {
 	}
 	return &u
 }
-func AddWorld() (int, error) {
+func AddWorld(mapid int) (int, error) {
 	if universe == nil {
 		return 0, errors.New("universe is nil")
 	}
-
-	w := InitWorld()
+	w, err := InitWorld(mapid)
+	if err != nil {
+		return 0, err
+	}
 	universe.worlds[w.MyId] = w
 	return w.MyId, nil
 }
@@ -66,11 +68,11 @@ func KillInWorld(idWorld, idUnit int) error {
 
 var theGod *sync.Once
 
+
 func BigBang(width, height int, scale float64) {
+
 	theGod.Do(func() {
 		universe = newUniverse(width, height, scale)
 	})
 
 }
-
-
