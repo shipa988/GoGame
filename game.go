@@ -1,15 +1,21 @@
+//go:generate statik -src=resources -include=*.png,*.tmx
 package main
 
 import (
+	"errors"
 	//"bytes"
 	"flag"
 	"fmt"
 	e "github.com/hajimehoshi/ebiten"
+	"strings"
+
 	//"github.com/markbates/pkger"
 	"github.com/rakyll/statik/fs"
 	//"github.com/gobuffalo/packr/v2"
 	//"github.com/markbates/pkger"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
+	"github.com/lafriks/go-tiled"
+	"github.com/lafriks/go-tiled/render"
 	_ "github.com/shipa988/ebitentest/statik" // TODO: Replace with the absolute import path
 	"image"
 	"image/png"
@@ -125,9 +131,9 @@ func init() {
 	skins := []string{"big_demon", "big_zombie", "elf_f"}
 	config = &Config{
 		title:  "Another Hero",
-		width:  720,
-		height: 480,
-		scale:  1,
+		width:  480,
+		height: 400,
+		scale:  2,
 	}
 	unit = &Unit{
 		Id:        1,
@@ -171,9 +177,32 @@ func main() {
 		log.Fatal(err)
 	}
 }
-
 func prepareLevelImage() (*e.Image, error) {
-	tileSize := config.width / 45
+	l,err:=LoadMapTMX(1)
+	if err!=nil{
+		return nil,err
+	}
+	//all,ok:=l["background"]
+	all,ok:=l["all_layers"]
+	if ok{
+		//levelImage, _ := e.NewImage(all.Width, all.Height, e.FilterDefault)
+		op := &e.DrawImageOptions{}
+		op.GeoM.Translate(float64(all.Width), float64(all.Height))
+		img:= all.Frames[0]
+
+		/*err = levelImage.DrawImage(img, op)
+		if err != nil {
+			log.Println(err)
+			return levelImage, err
+		}*/
+
+		return img.(*e.Image), nil
+	}
+return nil,errors.New("can't load map")
+}
+
+func _prepareLevelImage() (*e.Image, error) {
+	tileSize := 16
 	level := LoadLevel()
 	width := len(level[0])
 	height := len(level)
@@ -282,6 +311,77 @@ func handleKeyboard() {
 	//prevKey = lastKey
 }
 
+func LoadMapTMX(mapId int) (map[string]Frames, error) {
+	layers := map[string]Frames{}
+	statikFS, err := fs.New()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fs.Walk(statikFS, "/map/tmx", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		fmt.Println(path)
+
+		if info.IsDir() {
+			return nil
+		}
+		// Access individual files by their paths.
+		if !strings.Contains(path, `.tmx`) && !strings.EqualFold(path, /*strconv.Itoa(mapId)+*/ `map.tmx`) {
+			return nil
+		}
+		l := tiled.Loader{FileSystem: statikFS}
+		gameMap, err := l.LoadFromFile(path)
+
+		if err != nil {
+			fmt.Println("Error parsing map")
+			return nil
+		}
+
+		//fmt.Println(gameMap)
+
+		// You can also render the map to an in-memory image for direct
+		// use with the default Renderer, or by making your own.
+		renderer, err := render.NewRenderer(gameMap)
+		if err != nil {
+			fmt.Println("Error parsing map")
+			return nil
+		}
+
+		for i, layer := range gameMap.Layers {
+
+			name := layer.Name
+			renderer.RenderLayer(i)
+
+			img,_ := e.NewImageFromImage(renderer.Result,e.FilterDefault)
+			layers[name] = Frames{
+				Frames: []image.Image{img},
+				Config: image.Config{
+					ColorModel: img.ColorModel(),
+					Width:      img.Bounds().Max.X,
+					Height:     img.Bounds().Max.Y,
+				},
+			}
+		}
+		renderer.RenderVisibleLayers()
+
+		img,_ := e.NewImageFromImage(renderer.Result,e.FilterDefault)
+		layers["all_layers"] = Frames{
+			Frames: []image.Image{img},
+			Config: image.Config{
+				ColorModel: img.ColorModel(),
+				Width:      img.Bounds().Max.X,
+				Height:     img.Bounds().Max.Y,
+			},
+		}
+
+		// Get a reference to the Renderer's output, an image.NRGBA struct.
+
+		return nil
+	})
+	return layers, nil
+}
+
 func LoadResources() (map[string]Frames, error) {
 	images := map[string]image.Image{}
 	cfgs := map[string]image.Config{}
@@ -291,7 +391,7 @@ func LoadResources() (map[string]Frames, error) {
 		log.Fatal(err)
 	}
 
-	fs.Walk(statikFS, "/", func(path string, info os.FileInfo, err error) error {
+	fs.Walk(statikFS, "/sprites", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -311,7 +411,11 @@ func LoadResources() (map[string]Frames, error) {
 			return err
 		}
 		cfg, err := png.DecodeConfig(f)
-
+		if cfg.Width == 0 {
+			cfg.ColorModel = img.ColorModel()
+			cfg.Width = img.Bounds().Max.X
+			cfg.Height = img.Bounds().Max.Y
+		}
 		images[info.Name()] = img
 		cfgs[info.Name()] = cfg
 		f.Close()
