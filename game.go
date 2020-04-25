@@ -3,6 +3,9 @@ package main
 
 import (
 	"errors"
+	"sort"
+	"strconv"
+
 	//"bytes"
 	"flag"
 	"fmt"
@@ -45,7 +48,7 @@ type Camera struct {
 
 var config *Config
 var camera *Camera
-var levelImage *e.Image
+var level *Level
 var frames map[string]Frames
 var frame int
 var unit *Unit
@@ -73,7 +76,13 @@ type Unit struct {
 }
 type Frames struct {
 	Frames []image.Image
+	render.Coll
 	image.Config
+}
+
+type Level struct {
+	levelImage e.Image
+	collisions render.Coll
 }
 
 const (
@@ -122,7 +131,8 @@ func Update(screen *e.Image) error {
 			return err
 		}
 	}
-	ebitenutil.DebugPrint(screen, fmt.Sprintf("U.x: %0.2f U.y: %0.2f cam.x: %0.2f cam.y: %0.2f", unit.X, unit.Y, camera.X, camera.Y))
+
+	ebitenutil.DebugPrint(screen, fmt.Sprintf("fps %0.2f U.x: %0.2f U.y: %0.2f cam.x: %0.2f cam.y: %0.2f", e.CurrentFPS(), unit.X, unit.Y, camera.X, camera.Y))
 	return nil
 }
 
@@ -131,14 +141,14 @@ func init() {
 	skins := []string{"big_demon", "big_zombie", "elf_f"}
 	config = &Config{
 		title:  "Another Hero",
-		width:  480,
-		height: 400,
+		width:  420,
+		height: 420,
 		scale:  2,
 	}
 	unit = &Unit{
 		Id:        1,
-		X:         rnd.Float64()*float64(config.width-config.width/16) + 10,
-		Y:         rnd.Float64()*float64(config.height-config.height/16) + 10,
+		X:         40, //rnd.Float64()*float64(config.width-config.width/16) + 10,
+		Y:         40, //rnd.Float64()*float64(config.height-config.height/16) + 10,
 		Frame:     int32(rnd.Intn(4)),
 		Skin:      skins[rnd.Intn(len(skins))],
 		Action:    "idle",
@@ -167,7 +177,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	levelImage, err = prepareLevelImage()
+	level, err = prepareLevel()
 	camera = &Camera{
 		X:       unit.X,
 		Y:       unit.Y,
@@ -177,28 +187,26 @@ func main() {
 		log.Fatal(err)
 	}
 }
-func prepareLevelImage() (*e.Image, error) {
-	l,err:=LoadMapTMX(1)
-	if err!=nil{
-		return nil,err
+func prepareLevel() (*Level, error) {
+
+	l, err := LoadMapTMX(5)
+	if err != nil {
+		return nil, err
 	}
 	//all,ok:=l["background"]
-	all,ok:=l["all_layers"]
-	if ok{
-		//levelImage, _ := e.NewImage(all.Width, all.Height, e.FilterDefault)
+	//all,ok:=l["co"]
+	all, ok := l["all_layers"]
+	if ok {
 		op := &e.DrawImageOptions{}
 		op.GeoM.Translate(float64(all.Width), float64(all.Height))
-		img:= all.Frames[0]
-
-		/*err = levelImage.DrawImage(img, op)
-		if err != nil {
-			log.Println(err)
-			return levelImage, err
-		}*/
-
-		return img.(*e.Image), nil
+		img := all.Frames[0]
+		level := Level{
+			levelImage: *img.(*e.Image),
+			collisions: all.Coll,
+		}
+		return &level, nil
 	}
-return nil,errors.New("can't load map")
+	return nil, errors.New("can't load map")
 }
 
 func _prepareLevelImage() (*e.Image, error) {
@@ -241,40 +249,117 @@ func handleCamera(screen *e.Image) {
 
 	op := &e.DrawImageOptions{}
 	op.GeoM.Translate(-camera.X, -camera.Y)
-	screen.DrawImage(levelImage, op)
+	screen.DrawImage(&level.levelImage, op)
+}
+
+func SearchInt(a []int, x int) bool {
+	if x < a[0] || x > a[len(a)-1] {
+		return false
+	}
+
+	for _, y := range a {
+		if y == x {
+			return true
+		}
+		if y > x {
+			return false
+		}
+	}
+	return false
 }
 
 func handleKeyboard() {
 	//event := &game.Event{}
+	player := unit
+
+	frame := frames[player.Skin+"_"+player.Action]
+
 	var ismove bool
 	if e.IsKeyPressed(e.KeyA) || e.IsKeyPressed(e.KeyLeft) {
+
 		ismove = true
+		c, ok := level.collisions.ColmapX[int(unit.X-1)]
+		if ok {
+			//for y := int(unit.Y); y < int(unit.Y)+frame.Height; y++ {
+				//pos:=//pos!=0 and pos!=len(c)-значит найдено значение внутри массива
+				if SearchInt(c, int(unit.Y)+frame.Height) { //found coordinate
+					ismove = false
+					//break
+				}
+			//}
+
+		}
 		unit.Direction = Direction_left
 		unit.Side = Direction_left
-		unit.X -= unit.Speed
+		if ismove {
+			unit.X -= unit.Speed
+		}
+
 	}
 
 	if e.IsKeyPressed(e.KeyD) || e.IsKeyPressed(e.KeyRight) {
-		unit.Action = "run"
+
 		ismove = true
+		c, ok := level.collisions.ColmapX[int(unit.X+1)+frame.Width]
+		if ok {
+			//for y := int(unit.Y); y < int(unit.Y)+frame.Height; y++ {
+				//pos:=//pos!=0 and pos!=len(c)-значит найдено значение внутри массива
+				if SearchInt(c, int(unit.Y)+frame.Height) { //found coordinate
+					ismove = false
+				//	break
+			//	}
+			}
+
+		}
 		unit.Direction = Direction_right
 		unit.Side = Direction_right
-		unit.X += unit.Speed
+		if ismove {
+			unit.X += unit.Speed
+		}
+
 	}
 
 	if e.IsKeyPressed(e.KeyW) || e.IsKeyPressed(e.KeyUp) {
+
 		ismove = true
+		c, ok := level.collisions.ColmapY[int(unit.Y-1)+frame.Height]
+		if ok {
+			for x := int(unit.X); x < int(unit.X)+frame.Width; x++ {
+				//pos:=//pos!=0 and pos!=len(c)-значит найдено значение внутри массива
+				if SearchInt(c, x) { //found coordinate
+					ismove = false
+					break
+				}
+			}
+
+		}
 		unit.Direction = Direction_up
 		unit.Side = unit.Side
-		unit.Y -= unit.Speed
+		if ismove {
+			unit.Y -= unit.Speed
+		}
+
 	}
 
 	if e.IsKeyPressed(e.KeyS) || e.IsKeyPressed(e.KeyDown) {
+
 		ismove = true
+		c, ok := level.collisions.ColmapY[int(unit.Y+1)+frame.Height]
+		if ok {
+			for x := int(unit.X); x < int(unit.X)+frame.Width; x++ {
+				if SearchInt(c, x) { //found coordinate
+					ismove = false
+					break
+				}
+			}
+
+		}
 		unit.Direction = Direction_down
 		unit.Side = unit.Side
+		if ismove {
+			unit.Y += unit.Speed
+		}
 
-		unit.Y += unit.Speed
 	}
 
 	if ismove {
@@ -310,6 +395,17 @@ func handleKeyboard() {
 
 	//prevKey = lastKey
 }
+func unique(intSlice []int) []int {
+	keys := make(map[int]bool)
+	list := []int{}
+	for _, entry := range intSlice {
+		if _, value := keys[entry]; !value {
+			keys[entry] = true
+			list = append(list, entry)
+		}
+	}
+	return list
+}
 
 func LoadMapTMX(mapId int) (map[string]Frames, error) {
 	layers := map[string]Frames{}
@@ -327,7 +423,7 @@ func LoadMapTMX(mapId int) (map[string]Frames, error) {
 			return nil
 		}
 		// Access individual files by their paths.
-		if !strings.Contains(path, `.tmx`) && !strings.EqualFold(path, /*strconv.Itoa(mapId)+*/ `map.tmx`) {
+		if !strings.Contains(path, strconv.Itoa(mapId)+`_map.tmx`) {
 			return nil
 		}
 		l := tiled.Loader{FileSystem: statikFS}
@@ -351,11 +447,25 @@ func LoadMapTMX(mapId int) (map[string]Frames, error) {
 		for i, layer := range gameMap.Layers {
 
 			name := layer.Name
-			renderer.RenderLayer(i)
+			collision, err := renderer.RenderLayer(i)
+			if err != nil {
+				return err
+			}
+			for k, v := range collision.ColmapX {
+				m := unique(v)
+				sort.Ints(m)
+				collision.ColmapX[k] = m
+			}
+			for k, v := range collision.ColmapY {
+				m := unique(v)
+				sort.Ints(m)
+				collision.ColmapY[k] = m
+			}
 
-			img,_ := e.NewImageFromImage(renderer.Result,e.FilterDefault)
+			img, _ := e.NewImageFromImage(renderer.Result, e.FilterDefault)
 			layers[name] = Frames{
 				Frames: []image.Image{img},
+				Coll:   collision,
 				Config: image.Config{
 					ColorModel: img.ColorModel(),
 					Width:      img.Bounds().Max.X,
@@ -363,11 +473,24 @@ func LoadMapTMX(mapId int) (map[string]Frames, error) {
 				},
 			}
 		}
-		renderer.RenderVisibleLayers()
-
-		img,_ := e.NewImageFromImage(renderer.Result,e.FilterDefault)
+		collision, err := renderer.RenderVisibleLayers()
+		if err != nil {
+			return err
+		}
+		for k, v := range collision.ColmapX {
+			m := unique(v)
+			sort.Ints(m)
+			collision.ColmapX[k] = m
+		}
+		for k, v := range collision.ColmapY {
+			m := unique(v)
+			sort.Ints(m)
+			collision.ColmapY[k] = m
+		}
+		img, _ := e.NewImageFromImage(renderer.Result, e.FilterDefault)
 		layers["all_layers"] = Frames{
 			Frames: []image.Image{img},
+			Coll:   collision,
 			Config: image.Config{
 				ColorModel: img.ColorModel(),
 				Width:      img.Bounds().Max.X,
