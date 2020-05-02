@@ -54,11 +54,12 @@ var frames map[string]Frames
 var frame int
 var unit *Unit
 var sprite *Sprite
+var units Units
 
 type Direction int
 
 type Sprite struct {
-	op *e.DrawImageOptions
+	op     *e.DrawImageOptions
 	Frames []*e.Image
 	Frame  int
 	X      float64
@@ -66,6 +67,7 @@ type Sprite struct {
 	Side   Direction
 	Config image.Config
 }
+
 type Unit struct {
 	Id        int
 	X         float64
@@ -73,6 +75,7 @@ type Unit struct {
 	Frame     int32
 	Skin      string
 	Action    string
+	EAction   EvenType
 	Speed     float64
 	Direction Direction
 	Side      Direction
@@ -82,17 +85,12 @@ type Frames struct {
 	render.Coll
 	image.Config
 }
-/*type SpriteImage struct {
-	sprite Sprite
-	image *e.Image
-}
-*/
+
 type Level struct {
 	levelImage *e.Image
 	collisionX map[int][]int
 	collisionY map[int][]int
 	objects    []*Sprite
-
 }
 
 const (
@@ -104,8 +102,64 @@ const (
 
 var sprites []*Sprite
 
+type Units struct {
+	unitsprites map[int]*Sprite
+	mx          sync.RWMutex
+}
+
+func NewUnits() Units {
+	var u = Units{}
+	u.unitsprites = make(map[int]*Sprite)
+	return u
+}
+func (u *Units) Get(id int) *Sprite {
+	u.mx.RLock()
+	defer u.mx.RUnlock()
+	s, ok := u.unitsprites[id]
+	if ok {
+		return s
+	}
+	return nil
+}
+func (u *Units) Update(event Event) {
+	u.mx.Lock()
+	defer u.mx.Unlock()
+	player := unit
+	switch event.etype {
+	case move:
+		switch event.direction {
+		case Direction_right:
+			u.unitsprites[event.idunit].Side = event.direction
+			u.unitsprites[event.idunit].X += player.Speed
+			unit.X += unit.Speed
+		case Direction_left:
+			u.unitsprites[event.idunit].Side = event.direction
+			u.unitsprites[event.idunit].X -= player.Speed
+			unit.X -= unit.Speed
+		case Direction_up:
+			u.unitsprites[event.idunit].Y -= player.Speed
+			unit.Y -= unit.Speed
+		case Direction_down:
+			u.unitsprites[event.idunit].Y += player.Speed
+			unit.Y += unit.Speed
+		}
+	case idle:
+
+	}
+
+	u.unitsprites[event.idunit].Frames = frames[unit.Skin+"_"+unit.Action].Frames
+}
+
+func (u *Units) Add(s *Sprite, unitid int) {
+	u.mx.Lock()
+	defer u.mx.Unlock()
+	u.unitsprites[unitid] = s
+}
+
+var eventChan chan Event
+
 func Update(screen *e.Image) error {
-	handleKeyboard()
+	handleKeyboard(eventChan)
 	if e.IsDrawingSkipped() {
 		return nil
 	}
@@ -117,8 +171,8 @@ func Update(screen *e.Image) error {
 		depth2 := sprites[j].Y + float64(sprites[j].Config.Height)
 		return depth1 < depth2
 	})
-//	op := &e.DrawImageOptions{}
-/*	for _,obj:=range level.objects{
+	//	op := &e.DrawImageOptions{}
+	/*	for _,obj:=range level.objects{
 
 		op.GeoM.Reset()
 		op.GeoM.Translate(obj.sprite.X-camera.X, obj.sprite.Y-camera.Y)
@@ -137,7 +191,7 @@ func Update(screen *e.Image) error {
 		}
 		op.GeoM.Translate(sprite.X-camera.X, sprite.Y-camera.Y)
 
-		err:= screen.DrawImage(sprite.Frames[(frame/7+sprite.Frame)%len(sprite.Frames)], op)
+		err := screen.DrawImage(sprite.Frames[(frame/7+sprite.Frame)%len(sprite.Frames)], op)
 		if err != nil {
 			log.Println(err)
 			return err
@@ -159,7 +213,7 @@ func init() {
 	}
 	unit = &Unit{
 		Id:        1,
-		X:         80, //rnd.Float64()*float64(config.width-config.width/16) + 10,
+		X:         80,  //rnd.Float64()*float64(config.width-config.width/16) + 10,
 		Y:         128, //rnd.Float64()*float64(config.height-config.height/16) + 10,
 		Frame:     int32(rnd.Intn(4)),
 		Skin:      skins[rnd.Intn(len(skins))],
@@ -195,9 +249,13 @@ func main() {
 		return
 	}
 
-	done:=make(chan struct{})
+	done := make(chan struct{})
 	defer close(done)
-	wg:=&sync.WaitGroup{}
+
+	units = NewUnits()
+	eventChan = make(chan Event, 1)
+
+	wg := &sync.WaitGroup{}
 	var err error
 	frames, err = LoadResources()
 	if err != nil {
@@ -212,9 +270,9 @@ func main() {
 	}
 	op := &e.DrawImageOptions{}
 	sprites = append(sprites, level.objects...)
-	sprite=&Sprite{
+	sprite = &Sprite{
 		Frames: frames[unit.Skin+"_"+unit.Action].Frames,
-		op:op,
+		op:     op,
 		Frame:  int(unit.Frame),
 		X:      unit.X,
 		Y:      unit.Y,
@@ -222,25 +280,29 @@ func main() {
 		Config: frames[unit.Skin+"_"+unit.Action].Config,
 	}
 	sprites = append(sprites, sprite)
+	units.Add(sprite, unit.Id)
 	wg.Add(1)
 	go func(donech chan struct{}) {
-		defer 	wg.Done()
-		ticker:=time.NewTicker(time.Second/60)
-		for  {
+		event := Event{}
+		defer wg.Done()
+		//	ticker := time.NewTicker(time.Second / 60)
+		for {
 			select {
-			case <-ticker.C:
-				//spr.
-			case<-done:
+			case event = <-eventChan:
+				units.Update(event)
+			//case <-ticker.C:
+			//spr.
+			case <-done:
 				return
-
-
 			}
 		}
 	}(done)
+
 	if err := e.Run(Update, config.width, config.height, config.scale, config.title); err != nil {
 		log.Fatal(err)
 	}
-	done<- struct{}{}
+	fmt.Println("все")
+	done <- struct{}{}
 	wg.Wait()
 }
 func prepareLevel() (*Level, error) {
@@ -262,24 +324,24 @@ func prepareLevel() (*Level, error) {
 			collisionX: all.Coll.ColmapX,
 			collisionY: all.Coll.ColmapY,
 		}
-		for name,layer:=range l {
-			for k,v:= range layer.Coll.ColmapX {
+		for name, layer := range l {
+			for k, v := range layer.Coll.ColmapX {
 				level.collisionX[k] = append(level.collisionX[k], v...)
 			}
-			for k,v:= range layer.Coll.ColmapY {
+			for k, v := range layer.Coll.ColmapY {
 				level.collisionY[k] = append(level.collisionY[k], v...)
 			}
 
-			if strings.Index(name,"objects_")>=0{
+			if strings.Index(name, "objects_") >= 0 {
 				for _, object := range layer.TileObjects {
 					img, err := e.NewImageFromImage(object.TileImage, e.FilterDefault)
 					if err != nil {
 						log.Println(err)
 
 					}
-					level.objects = append(level.objects,  &Sprite{
+					level.objects = append(level.objects, &Sprite{
 						Frames: []*e.Image{img},
-						op: &e.DrawImageOptions{},
+						op:     &e.DrawImageOptions{},
 						Frame:  0,
 						X:      float64(object.TilePos.Min.X),
 						Y:      float64(object.TilePos.Min.Y),
@@ -289,21 +351,19 @@ func prepareLevel() (*Level, error) {
 							Width:      object.TileImage.Bounds().Max.X,
 							Height:     object.TileImage.Bounds().Max.Y,
 						},
-
-					} )
-
+					})
 
 				}
 
 			}
 		}
 
-		for k,v:=range level.collisionX  {
+		for k, v := range level.collisionX {
 			m := unique(v)
 			sort.Ints(m)
 			level.collisionX[k] = m
 		}
-		for k,v:=range level.collisionY  {
+		for k, v := range level.collisionY {
 			m := unique(v)
 			sort.Ints(m)
 			level.collisionY[k] = m
@@ -312,6 +372,17 @@ func prepareLevel() (*Level, error) {
 	}
 
 	return nil, errors.New("can't load map")
+}
+
+func WorldUpdate(echan chan Event) {
+	event := Event{}
+	for {
+		select {
+		case event = <-echan:
+			units.Update(event)
+		}
+	}
+
 }
 
 func handleCamera(screen *e.Image) {
@@ -345,143 +416,108 @@ func SearchInt(a []int, x int) bool {
 	return false
 }
 
-func handleKeyboard() {
-	//event := &game.Event{}
+type EvenType int
+
+const (
+	idle EvenType = iota
+	move
+	jump
+)
+
+type Event struct {
+	idunit    int
+	direction Direction
+	etype     EvenType
+}
+var direction Direction
+var etype EvenType
+var isEvent bool
+
+func handleKeyboard(echan chan Event) {
 	player := unit
-
 	frame := frames[player.Skin+"_"+player.Action]
-
-	var ismove bool
+	etype=idle
 	if e.IsKeyPressed(e.KeyA) || e.IsKeyPressed(e.KeyLeft) {
-
-		ismove = true
-		c, ok := level.collisionX[int(unit.X-1)]
+		isEvent=true
+		direction = Direction_left
+		c, ok := level.collisionX[int(player.X-1)]
 		if ok {
-			//for y := int(unit.Y); y < int(unit.Y)+frame.Height; y++ {
-			//pos:=//pos!=0 and pos!=len(c)-значит найдено значение внутри массива
-			if SearchInt(c, int(unit.Y)+frame.Height) { //found coordinate
-				ismove = false
-				//break
+			if !SearchInt(c, int(player.Y)+frame.Height) { //found coordinate
+				etype = move
 			}
-			//}
-
 		}
-		sprite.Side= Direction_left
-
-		unit.Direction = Direction_left
-		unit.Side = Direction_left
-		if ismove {
-			sprite.X-= unit.Speed
-			unit.X -= unit.Speed
-		}
-
 	}
 
 	if e.IsKeyPressed(e.KeyD) || e.IsKeyPressed(e.KeyRight) {
-
-		ismove = true
+		isEvent=true
+		direction = Direction_right
 		c, ok := level.collisionX[int(unit.X+1)+frame.Width]
 		if ok {
-			//for y := int(unit.Y); y < int(unit.Y)+frame.Height; y++ {
-			//pos:=//pos!=0 and pos!=len(c)-значит найдено значение внутри массива
-			if SearchInt(c, int(unit.Y)+frame.Height) { //found coordinate
-				ismove = false
-				//	break
-				//	}
+			if !SearchInt(c, int(unit.Y)+frame.Height) { //found coordinate
+				etype = move
 			}
-
 		}
-		sprite.Side = Direction_right
-		unit.Direction = Direction_right
-		unit.Side = Direction_right
-		if ismove {
-			unit.X += unit.Speed
-			sprite.X+= unit.Speed
-		}
-
 	}
 
 	if e.IsKeyPressed(e.KeyW) || e.IsKeyPressed(e.KeyUp) {
-
-		ismove = true
+		isEvent=true
+		direction = Direction_up
 		c, ok := level.collisionY[int(unit.Y-1)+frame.Height]
 		if ok {
 			for x := int(unit.X); x < int(unit.X)+frame.Width; x++ {
-				//pos:=//pos!=0 and pos!=len(c)-значит найдено значение внутри массива
-				if SearchInt(c, x) { //found coordinate
-					ismove = false
-					break
+				if !SearchInt(c, x) { //found coordinate
+					etype = move
 				}
 			}
-
 		}
-
-		unit.Direction = Direction_up
-		unit.Side = unit.Side
-		if ismove {
-			unit.Y -= unit.Speed
-			sprite.Y -= unit.Speed
-	}
-
 	}
 
 	if e.IsKeyPressed(e.KeyS) || e.IsKeyPressed(e.KeyDown) {
-
-		ismove = true
+		isEvent=true
+		direction = Direction_down
 		c, ok := level.collisionY[int(unit.Y+1)+frame.Height]
 		if ok {
 			for x := int(unit.X); x < int(unit.X)+frame.Width; x++ {
 				if SearchInt(c, x) { //found coordinate
-					ismove = false
-					break
+					etype = move
 				}
 			}
 
 		}
-		sprite.Side=Direction_down
-		unit.Direction = Direction_down
-		unit.Side = unit.Side
-		if ismove {
-			unit.Y += unit.Speed
-			sprite.Y += unit.Speed
+	}
+	if isEvent || player.Action==UnitActionMove{
+		event := Event{
+			idunit: player.Id,
+			etype:  etype,
+			direction:direction,
 		}
-
+		echan <- event
 	}
 
-	if ismove {
-		unit.Action = UnitActionMove
+	//if event.etype!=move {
 
-		/*if prevKey != lastKey {
-			message, err := proto.Marshal(event)
-			if err != nil {
-				log.Println(err)
-				return
+	//	if unit.Action != UnitActionIdle {
+	//		unit.Action = UnitActionIdle
+	//	}
+	/*	event = &game.Event{
+					Type: game.Event_type_idle,
+					Data: &game.Event_Idle{
+						&game.EventIdle{PlayerId: world.MyID},
+					},
+				}
+				message, err := proto.Marshal(event)
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				c.WriteMessage(websocket.BinaryMessage, message)
+				lastKey = -1
 			}
-			c.WriteMessage(websocket.BinaryMessage, message)
-		}*/
-	} else {
-
-		if unit.Action != UnitActionIdle {
-			unit.Action = UnitActionIdle
-		}
-		/*	event = &game.Event{
-				Type: game.Event_type_idle,
-				Data: &game.Event_Idle{
-					&game.EventIdle{PlayerId: world.MyID},
-				},
-			}
-			message, err := proto.Marshal(event)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			c.WriteMessage(websocket.BinaryMessage, message)
-			lastKey = -1
-		}*/
-	}
-	sprite.Frames= frames[unit.Skin+"_"+unit.Action].Frames
+		//}
+		//	sprite.Frames = frames[unit.Skin+"_"+unit.Action].Frames*/
 	//return unit
 	//prevKey = lastKey
+	//}
 }
 func unique(intSlice []int) []int {
 	keys := make(map[int]bool)
@@ -735,51 +771,4 @@ func LoadResources() (map[string]Frames, error) {
 		Config: cfgs["wall_side_front_right.png"],
 	}
 	return sprites, nil
-}
-func LoadLevel() [][]string {
-	a := "floor_1"
-	b := "floor_2"
-	c := "floor_3"
-	d := "floor_4"
-	e := "wall_side_front_left"
-	f := "wall_side_front_right"
-
-	level := [][]string{
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, b, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, c, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, c, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, f},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, d, d, d, d, d, a, a, a, a, a, a, a, d, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-		[]string{e, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a},
-	}
-
-	return level
 }
