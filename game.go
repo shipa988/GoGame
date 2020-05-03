@@ -3,24 +3,27 @@ package main
 
 import (
 	"errors"
+	//"math"
 	"sort"
 	"strconv"
 	"sync"
+	//"sync/atomic"
+	//"unsafe"
 
 	//"bytes"
 	"flag"
 	"fmt"
 	e "github.com/hajimehoshi/ebiten"
 	"strings"
-
+	"go.uber.org/atomic"
 	//"github.com/markbates/pkger"
 	"github.com/rakyll/statik/fs"
 	//"github.com/gobuffalo/packr/v2"
 	//"github.com/markbates/pkger"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
-	"github.com/lafriks/go-tiled"
-	"github.com/lafriks/go-tiled/render"
 	_ "github.com/shipa988/ebitentest/statik" // TODO: Replace with the absolute import path
+	"github.com/shipa988/go-tiled"
+	"github.com/shipa988/go-tiled/render"
 	"image"
 	"image/png"
 	"log"
@@ -30,10 +33,6 @@ import (
 	"time"
 )
 
-const (
-	UnitActionIdle = "idle"
-	UnitActionMove = "run"
-)
 
 type Config struct {
 	title  string
@@ -59,19 +58,21 @@ var units Units
 type Direction int
 
 type Sprite struct {
+	mx          sync.RWMutex
+	unit	Unit
 	op     *e.DrawImageOptions
 	Frames []*e.Image
 	Frame  int
-	X      float64
-	Y      float64
+	X      atomic.Float64
+	Y      atomic.Float64
 	Side   Direction
 	Config image.Config
 }
 
 type Unit struct {
 	Id        int
-	X         float64
-	Y         float64
+	X         atomic.Float64
+	Y         atomic.Float64
 	Frame     int32
 	Skin      string
 	Action    string
@@ -102,6 +103,7 @@ const (
 
 var sprites []*Sprite
 
+
 type Units struct {
 	unitsprites map[int]*Sprite
 	mx          sync.RWMutex
@@ -121,33 +123,42 @@ func (u *Units) Get(id int) *Sprite {
 	}
 	return nil
 }
+
 func (u *Units) Update(event Event) {
-	u.mx.Lock()
-	defer u.mx.Unlock()
 	player := unit
 	switch event.etype {
 	case move:
 		switch event.direction {
 		case Direction_right:
 			u.unitsprites[event.idunit].Side = event.direction
-			u.unitsprites[event.idunit].X += player.Speed
-			unit.X += unit.Speed
+			u.unitsprites[event.idunit].X.Add(player.Speed)
+			unit.X.Add(unit.Speed)
 		case Direction_left:
+			u.unitsprites[event.idunit].X.Sub(player.Speed)
 			u.unitsprites[event.idunit].Side = event.direction
-			u.unitsprites[event.idunit].X -= player.Speed
-			unit.X -= unit.Speed
+			unit.X.Sub(unit.Speed)
 		case Direction_up:
-			u.unitsprites[event.idunit].Y -= player.Speed
-			unit.Y -= unit.Speed
+			u.unitsprites[event.idunit].Y.Sub(player.Speed)
+			unit.Y.Sub(unit.Speed)
 		case Direction_down:
-			u.unitsprites[event.idunit].Y += player.Speed
-			unit.Y += unit.Speed
+			u.unitsprites[event.idunit].Y.Add(player.Speed)
+			unit.Y.Add(unit.Speed)
 		}
+		unit.Action=UnitActionMove
+		u.unitsprites[event.idunit].Frames = frames[unit.Skin+"_"+unit.Action].Frames
 	case idle:
+		unit.Action=UnitActionIdle
+		u.unitsprites[event.idunit].Frames = frames[unit.Skin+"_"+unit.Action].Frames
+	case jump:
+	case born:
+		u.mx.Lock()
+		defer u.mx.Unlock()
+	case die:
+		u.mx.Lock()
+		defer u.mx.Unlock()
 
 	}
 
-	u.unitsprites[event.idunit].Frames = frames[unit.Skin+"_"+unit.Action].Frames
 }
 
 func (u *Units) Add(s *Sprite, unitid int) {
@@ -166,22 +177,15 @@ func Update(screen *e.Image) error {
 	handleCamera(screen)
 
 	frame++
+	//атомарно выбрать спрайты всеъ юнитов и обновить значения
+
 	sort.Slice(sprites, func(i, j int) bool {
-		depth1 := sprites[i].Y + float64(sprites[i].Config.Height)
-		depth2 := sprites[j].Y + float64(sprites[j].Config.Height)
+		depth1 := sprites[i].Y.Load() + float64(sprites[i].Config.Height)
+		depth2 := sprites[j].Y.Load() + float64(sprites[j].Config.Height)
+		return depth1 < depth2
 		return depth1 < depth2
 	})
-	//	op := &e.DrawImageOptions{}
-	/*	for _,obj:=range level.objects{
 
-		op.GeoM.Reset()
-		op.GeoM.Translate(obj.sprite.X-camera.X, obj.sprite.Y-camera.Y)
-		err:= screen.DrawImage(obj.image, op)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-	}*/
 	for _, sprite := range sprites {
 		op := &e.DrawImageOptions{}
 		op.GeoM.Reset()
@@ -189,7 +193,7 @@ func Update(screen *e.Image) error {
 			op.GeoM.Scale(-1, 1)
 			op.GeoM.Translate(float64(sprite.Config.Width), 0)
 		}
-		op.GeoM.Translate(sprite.X-camera.X, sprite.Y-camera.Y)
+		op.GeoM.Translate(sprite.X.Load()-camera.X, sprite.Y.Load()-camera.Y)
 
 		err := screen.DrawImage(sprite.Frames[(frame/7+sprite.Frame)%len(sprite.Frames)], op)
 		if err != nil {
@@ -198,9 +202,10 @@ func Update(screen *e.Image) error {
 		}
 	}
 
-	ebitenutil.DebugPrint(screen, fmt.Sprintf("fps %0.2f U.x: %0.2f U.y: %0.2f cam.x: %0.2f cam.y: %0.2f", e.CurrentFPS(), unit.X, unit.Y, camera.X, camera.Y))
+	ebitenutil.DebugPrint(screen, fmt.Sprintf("fps %0.2f U.x: %0.2f U.y: %0.2f cam.x: %0.2f cam.y: %0.2f", e.CurrentFPS(), unit.X.Load(), unit.Y.Load(), camera.X, camera.Y))
 	return nil
 }
+
 
 func init() {
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -211,10 +216,14 @@ func init() {
 		height: 420,
 		scale:  2,
 	}
+	var atomX atomic.Float64
+	atomX.Store(80)
+	var atomY atomic.Float64
+	atomY.Store(128)
 	unit = &Unit{
 		Id:        1,
-		X:         80,  //rnd.Float64()*float64(config.width-config.width/16) + 10,
-		Y:         128, //rnd.Float64()*float64(config.height-config.height/16) + 10,
+		X:         atomX,  //rnd.Float64()*float64(config.width-config.width/16) + 10,
+		Y:         atomY, //rnd.Float64()*float64(config.height-config.height/16) + 10,
 		Frame:     int32(rnd.Intn(4)),
 		Skin:      skins[rnd.Intn(len(skins))],
 		Action:    "idle",
@@ -264,12 +273,13 @@ func main() {
 
 	level, err = prepareLevel()
 	camera = &Camera{
-		X:       unit.X,
-		Y:       unit.Y,
+		X:       unit.X.Load(),
+		Y:       unit.Y.Load(),
 		Padding: 30,
 	}
 	op := &e.DrawImageOptions{}
 	sprites = append(sprites, level.objects...)
+
 	sprite = &Sprite{
 		Frames: frames[unit.Skin+"_"+unit.Action].Frames,
 		op:     op,
@@ -339,12 +349,16 @@ func prepareLevel() (*Level, error) {
 						log.Println(err)
 
 					}
+					var atomX atomic.Float64
+					atomX.Store(float64(object.TilePos.Min.X))
+					var atomY atomic.Float64
+					atomY.Store(float64(object.TilePos.Min.Y))
 					level.objects = append(level.objects, &Sprite{
 						Frames: []*e.Image{img},
 						op:     &e.DrawImageOptions{},
 						Frame:  0,
-						X:      float64(object.TilePos.Min.X),
-						Y:      float64(object.TilePos.Min.Y),
+						X:      atomX ,
+						Y:      atomY,
 						Side:   3,
 						Config: image.Config{
 							ColorModel: object.TileImage.ColorModel(),
@@ -390,10 +404,10 @@ func handleCamera(screen *e.Image) {
 		return
 	}
 
-	player := unit
-	frame := frames[player.Skin+"_"+player.Action]
-	camera.X = player.X - float64(config.width-frame.Config.Width)/2
-	camera.Y = player.Y - float64(config.height-frame.Config.Height)/2
+//	player := unit
+	frame := frames[unit.Skin+"_"+unit.Action]
+	camera.X = unit.X.Load() - float64(config.width-frame.Config.Width)/2
+	camera.Y = unit.Y.Load() - float64(config.height-frame.Config.Height)/2
 
 	op := &e.DrawImageOptions{}
 	op.GeoM.Translate(-camera.X, -camera.Y)
@@ -419,9 +433,15 @@ func SearchInt(a []int, x int) bool {
 type EvenType int
 
 const (
+UnitActionIdle = "idle"
+UnitActionMove = "run"
+)
+const (
 	idle EvenType = iota
 	move
 	jump
+	born
+	die
 )
 
 type Event struct {
@@ -434,15 +454,16 @@ var etype EvenType
 var isEvent bool
 
 func handleKeyboard(echan chan Event) {
-	player := unit
-	frame := frames[player.Skin+"_"+player.Action]
+	//player := unit
+	frame := frames[unit.Skin+"_"+unit.Action]
 	etype=idle
+
 	if e.IsKeyPressed(e.KeyA) || e.IsKeyPressed(e.KeyLeft) {
 		isEvent=true
 		direction = Direction_left
-		c, ok := level.collisionX[int(player.X-1)]
+		c, ok := level.collisionX[int(unit.X.Load()-1)]
 		if ok {
-			if !SearchInt(c, int(player.Y)+frame.Height) { //found coordinate
+			if !SearchInt(c, int(unit.Y.Load())+frame.Height) { //found coordinate
 				etype = move
 			}
 		}
@@ -451,9 +472,9 @@ func handleKeyboard(echan chan Event) {
 	if e.IsKeyPressed(e.KeyD) || e.IsKeyPressed(e.KeyRight) {
 		isEvent=true
 		direction = Direction_right
-		c, ok := level.collisionX[int(unit.X+1)+frame.Width]
+		c, ok := level.collisionX[int(unit.X.Load()+1)+frame.Width]
 		if ok {
-			if !SearchInt(c, int(unit.Y)+frame.Height) { //found coordinate
+			if !SearchInt(c, int(unit.Y.Load())+frame.Height) { //found coordinate
 				etype = move
 			}
 		}
@@ -462,9 +483,9 @@ func handleKeyboard(echan chan Event) {
 	if e.IsKeyPressed(e.KeyW) || e.IsKeyPressed(e.KeyUp) {
 		isEvent=true
 		direction = Direction_up
-		c, ok := level.collisionY[int(unit.Y-1)+frame.Height]
+		c, ok := level.collisionY[int(unit.Y.Load()-1)+frame.Height]
 		if ok {
-			for x := int(unit.X); x < int(unit.X)+frame.Width; x++ {
+			for x := int(unit.X.Load()); x < int(unit.X.Load())+frame.Width; x++ {
 				if !SearchInt(c, x) { //found coordinate
 					etype = move
 				}
@@ -475,19 +496,19 @@ func handleKeyboard(echan chan Event) {
 	if e.IsKeyPressed(e.KeyS) || e.IsKeyPressed(e.KeyDown) {
 		isEvent=true
 		direction = Direction_down
-		c, ok := level.collisionY[int(unit.Y+1)+frame.Height]
+		c, ok := level.collisionY[int(unit.Y.Load()+1)+frame.Height]
 		if ok {
-			for x := int(unit.X); x < int(unit.X)+frame.Width; x++ {
-				if SearchInt(c, x) { //found coordinate
+			for x := int(unit.X.Load()); x < int(unit.X.Load())+frame.Width; x++ {
+				if !SearchInt(c, x) { //found coordinate
 					etype = move
 				}
 			}
 
 		}
 	}
-	if isEvent || player.Action==UnitActionMove{
+	if isEvent || unit.Action==UnitActionMove{
 		event := Event{
-			idunit: player.Id,
+			idunit: unit.Id,
 			etype:  etype,
 			direction:direction,
 		}
