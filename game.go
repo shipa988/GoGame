@@ -18,8 +18,8 @@ import (
 	//"github.com/gobuffalo/packr/v2"
 	//"github.com/markbates/pkger"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
-	"github.com/lafriks/go-tiled"
-	"github.com/lafriks/go-tiled/render"
+	"github.com/shipa988/go-tiled"
+	"github.com/shipa988/go-tiled/render"
 	_ "github.com/shipa988/ebitentest/statik" // TODO: Replace with the absolute import path
 	"image"
 	"image/png"
@@ -144,7 +144,7 @@ func Update(screen *e.Image) error {
 		}
 	}
 
-	ebitenutil.DebugPrint(screen, fmt.Sprintf("fps %0.2f U.x: %0.2f U.y: %0.2f cam.x: %0.2f cam.y: %0.2f", e.CurrentFPS(), unit.X, unit.Y, camera.X, camera.Y))
+	ebitenutil.DebugPrint(screen, fmt.Sprintf("frame %v fps %0.2f U.x: %0.2f U.y: %0.2f cam.x: %0.2f cam.y: %0.2f", unit.Action, e.CurrentFPS(), unit.X, unit.Y, camera.X, camera.Y,))
 	return nil
 }
 
