@@ -7,7 +7,7 @@ import (
 
 func BenchmarkUpdate(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		e.Run(Update, config.width, config.height, config.scale, config.title);
-		}
+		e.Run(Update, config.width, config.height, config.scale, config.title)
+	}
 
 }
