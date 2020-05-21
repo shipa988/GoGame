@@ -59,7 +59,7 @@ var unit *Unit
 var myUnitId uuid.UUID
 var sprite *Sprite
 
-//var frames map[string]Frames
+var frames map[string]Frames
 
 var frame int
 
@@ -119,8 +119,9 @@ type ImageConfig struct {
 }
 
 type Sprite struct {
-	op     *e.DrawImageOptions
-	Frames map[EvenType][]*e.Image
+	op *e.DrawImageOptions
+	//Frames map[EvenType][]*e.Image
+	Frames []*e.Image
 	Frame  int
 	X      float64
 	Y      float64
@@ -270,9 +271,9 @@ func (u *Units) Update(donech chan struct{}, wg *sync.WaitGroup) {
 				for _, unitsprite := range u.unitsprites {
 					player := unitsprite.unit
 					sprite := unitsprite.sprite
-					sprite.Frames[]
+					//sprite.Frames[]
 					frame := frames[player.Skin+"_"+player.Action]
-
+					sprite.Frames = frame.images
 					if player.Action == UnitActionMove {
 						ismove = true
 						player.Action = UnitActionMove
@@ -419,7 +420,7 @@ func main() {
 			log.Fatal("could not create memory profile: ", err)
 		}
 		defer f.Close() // error handling omitted for example
-		runtime.GC() // get up-to-date statistics
+		runtime.GC()    // get up-to-date statistics
 		if err := pprof.WriteHeapProfile(f); err != nil {
 			log.Fatal("could not write memory profile: ", err)
 		}
@@ -434,7 +435,9 @@ func main() {
 		log.Fatal(err)
 	}
 	level, err = prepareLevel()
-
+	if err != nil {
+		log.Fatal(err)
+	}
 	skins := []string{"chort"}
 	myUnitId = uuid.Must(uuid.NewV4(), err)
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -474,12 +477,12 @@ func main() {
 		defer wg.Done()
 		var rnd *rand.Rand
 		skins := []string{"big_demon", "big_zombie", "goblin", "elf_f"}
-		ticker := time.NewTicker(time.Millisecond * 50)
+		ticker := time.NewTicker(time.Second * 2)
 		for {
 			select {
 			case <-ticker.C:
 				rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
-				//	time.Sleep(time.Second * 2)
+				//	time.Sleep(time.Second * 2
 				otherUnitId := uuid.Must(uuid.NewV4(), err)
 				otherUnit := &Unit{
 					Id:        otherUnitId,
@@ -664,14 +667,14 @@ func handleKeyboard() {
 		prevKey = lastKey
 	}
 }
-
+//sed -Ein "s/([- ,])([0-9]+)\.[0-9]+/\1\2/"g %mapfile
 func LoadMapTMX(mapId int) (map[string]Frames, error) {
 	layers := map[string]Frames{}
 	statikFS, err := fs.New()
 	if err != nil {
 		log.Fatal(err)
 	}
-	fs.Walk(statikFS, "/map/tmx", func(path string, info os.FileInfo, err error) error {
+	err = fs.Walk(statikFS, "/map/tmx", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -680,15 +683,14 @@ func LoadMapTMX(mapId int) (map[string]Frames, error) {
 			return nil
 		}
 		// Access individual files by their paths.
-		if !strings.Contains(path, strconv.Itoa(mapId)+`_map.tmx`) {
+		if !strings.Contains(path, strconv.Itoa(mapId)+`_map_path.tmx`) { //todo: replace on _map.tmx
 			return nil
 		}
 		l := tiled.Loader{FileSystem: statikFS}
 		gameMap, err := l.LoadFromFile(path)
 
 		if err != nil {
-			fmt.Println("Error parsing map")
-			return nil
+			return err
 		}
 
 		//fmt.Println(gameMap)
@@ -759,7 +761,7 @@ func LoadMapTMX(mapId int) (map[string]Frames, error) {
 
 		return nil
 	})
-	return layers, nil
+	return layers, err
 }
 
 func LoadResources() (map[string]Frames, error) {
