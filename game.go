@@ -4,6 +4,7 @@ package main
 import (
 	"errors"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
+	"runtime"
 
 	//"github.com/hajimehoshi/ebiten/ebitenutil"
 	"image/color"
@@ -58,7 +59,7 @@ var unit *Unit
 var myUnitId uuid.UUID
 var sprite *Sprite
 
-var frames map[string]Frames
+//var frames map[string]Frames
 
 var frame int
 
@@ -70,6 +71,7 @@ var prevKey e.Key
 
 var direction Direction
 var etype EvenType
+
 //var isEvent bool
 var sprites []*Sprite
 var eventChan chan Event
@@ -112,20 +114,19 @@ type Event struct {
 
 type ImageConfig struct {
 	ColorModel color.Model
-	Width  float64
-	Height float64
+	Width      float64
+	Height     float64
 }
 
 type Sprite struct {
 	op     *e.DrawImageOptions
-	Frames []*e.Image
+	Frames map[EvenType][]*e.Image
 	Frame  int
 	X      float64
 	Y      float64
 	Side   Direction
 	Config ImageConfig
 }
-
 
 type Unit struct {
 	Id        uuid.UUID
@@ -148,22 +149,23 @@ type MyMutex struct {
 	mx sync.RWMutex
 }
 
-func (m *MyMutex) Lock()  {
+func (m *MyMutex) Lock() {
 	m.mx.Lock()
 	fmt.Println("Lock")
 }
-func (m *MyMutex) RLock()  {
+func (m *MyMutex) RLock() {
 	m.mx.RLock()
 	fmt.Println("RLock")
 }
-func (m *MyMutex) Unlock()  {
+func (m *MyMutex) Unlock() {
 	m.mx.Unlock()
 	fmt.Println("Unlock")
 }
-func (m *MyMutex) RUnlock()  {
+func (m *MyMutex) RUnlock() {
 	m.mx.RUnlock()
 	fmt.Println("RUnlock")
 }
+
 type Units struct {
 	unitsprites map[uuid.UUID]*UnitSprite
 	mx          sync.RWMutex
@@ -205,11 +207,11 @@ func (u *Units) GetSprite(id uuid.UUID) *Sprite {
 	return nil
 }
 
-func (u *Units) HandleEvent(eventChan chan Event,donech chan struct{},wg *sync.WaitGroup) {
+func (u *Units) HandleEvent(eventChan chan Event, donech chan struct{}, wg *sync.WaitGroup) {
 	wg.Add(1)
 	func() {
 		event := Event{}
-		player:=&Unit{}
+		player := &Unit{}
 		defer wg.Done()
 		for {
 			select {
@@ -243,21 +245,21 @@ func (u *Units) Add(uuid uuid.UUID, sp *Sprite, un *Unit) {
 	sprites = append(sprites, sp)
 	sort.Slice(sprites, func(i, j int) bool {
 		depth1 := sprites[i].Y + sprites[i].Config.Height
-		depth2 := sprites[j].Y +sprites[j].Config.Height
+		depth2 := sprites[j].Y + sprites[j].Config.Height
 		return depth1 < depth2
 	})
 
 	u.mx.Unlock()
 }
 
-func (u *Units) Update(donech chan struct{},wg *sync.WaitGroup) {
+func (u *Units) Update(donech chan struct{}, wg *sync.WaitGroup) {
 	wg.Add(1)
 	func() {
 		defer wg.Done()
 		var ismove bool
-		sortsprites:=func(i, j int) bool {
+		sortsprites := func(i, j int) bool {
 			depth1 := sprites[i].Y + sprites[i].Config.Height
-			depth2 := sprites[j].Y +sprites[j].Config.Height
+			depth2 := sprites[j].Y + sprites[j].Config.Height
 			return depth1 < depth2
 		}
 		ticker := time.NewTicker(time.Second / 60)
@@ -268,6 +270,7 @@ func (u *Units) Update(donech chan struct{},wg *sync.WaitGroup) {
 				for _, unitsprite := range u.unitsprites {
 					player := unitsprite.unit
 					sprite := unitsprite.sprite
+					sprite.Frames[]
 					frame := frames[player.Skin+"_"+player.Action]
 
 					if player.Action == UnitActionMove {
@@ -288,7 +291,7 @@ func (u *Units) Update(donech chan struct{},wg *sync.WaitGroup) {
 								sprite.X += player.Speed
 							}
 						case Direction_left:
-							c, ok := level.collisionX[(player.X-1)]
+							c, ok := level.collisionX[(player.X - 1)]
 							if ok {
 								if SearchFloat(c, (player.Y)+frame.Config.Height) { //found coordinate
 									ismove = false
@@ -331,7 +334,7 @@ func (u *Units) Update(donech chan struct{},wg *sync.WaitGroup) {
 							}
 						}
 					}
-					sprite.Frames = frames[player.Skin+"_"+player.Action].images
+
 				}
 				sort.Slice(sprites, sortsprites)
 				u.mx.Unlock()
@@ -340,8 +343,6 @@ func (u *Units) Update(donech chan struct{},wg *sync.WaitGroup) {
 			}
 		}
 	}()
-
-
 
 }
 
@@ -397,22 +398,31 @@ var memprofile = flag.String("memprofile", "", "write memory profile to this fil
 
 func main() {
 	flag.Parse()
+	flag.Parse()
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal("could not create CPU profile: ", err)
 		}
-		pprof.StartCPUProfile(f)
+		defer f.Close() // error handling omitted for example
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
 		defer pprof.StopCPUProfile()
 	}
+
+	// ... rest of the program ...
+
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal("could not create memory profile: ", err)
 		}
-		pprof.WriteHeapProfile(f)
-		f.Close()
-		return
+		defer f.Close() // error handling omitted for example
+		runtime.GC() // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
 	}
 	eventChan = make(chan Event, 0)
 	done := make(chan struct{})
@@ -426,7 +436,7 @@ func main() {
 	level, err = prepareLevel()
 
 	skins := []string{"chort"}
-	myUnitId= uuid.Must(uuid.NewV4(), err)
+	myUnitId = uuid.Must(uuid.NewV4(), err)
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 	unit = &Unit{
 		Id:        myUnitId,
@@ -456,8 +466,8 @@ func main() {
 	sprites = append(sprites, level.objects...)
 
 	units.Add(myUnitId, sprite, unit)
-	go units.HandleEvent(eventChan,done,wg)
-	go units.Update(done,wg)
+	go units.HandleEvent(eventChan, done, wg)
+	go units.Update(done, wg)
 
 	wg.Add(1)
 	go func(donech chan struct{}) {
@@ -469,12 +479,12 @@ func main() {
 			select {
 			case <-ticker.C:
 				rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
-			//	time.Sleep(time.Second * 2)
-				otherUnitId:=uuid.Must(uuid.NewV4(), err)
+				//	time.Sleep(time.Second * 2)
+				otherUnitId := uuid.Must(uuid.NewV4(), err)
 				otherUnit := &Unit{
 					Id:        otherUnitId,
-					X:         212,//float64(rnd.Intn(level.levelImage.Bounds().Max.X)) , //(rnd.Float64()*float64(level.levelImage.Bounds().Max.X-20)/float64(rnd.Intn(2)))+10,
-					Y:         132,//float64(rnd.Intn(level.levelImage.Bounds().Max.Y)) , //(rnd.Float64()*float64(level.levelImage.Bounds().Max.Y-20)/float64(rnd.Intn(2)))+10,
+					X:         212, //float64(rnd.Intn(level.levelImage.Bounds().Max.X)) , //(rnd.Float64()*float64(level.levelImage.Bounds().Max.X-20)/float64(rnd.Intn(2)))+10,
+					Y:         132, //float64(rnd.Intn(level.levelImage.Bounds().Max.Y)) , //(rnd.Float64()*float64(level.levelImage.Bounds().Max.Y-20)/float64(rnd.Intn(2)))+10,
 					Frame:     int32(rnd.Intn(4)),
 					Skin:      skins[rnd.Intn(len(skins))],
 					Action:    "idle",
@@ -540,7 +550,7 @@ func prepareLevel() (*Level, error) {
 
 	if ok {
 		op := &e.DrawImageOptions{}
-		op.GeoM.Translate(all.Config.Width,all.Config.Height)
+		op.GeoM.Translate(all.Config.Width, all.Config.Height)
 		img := all.images[0]
 		level := Level{
 			levelImage: img,
@@ -572,7 +582,7 @@ func prepareLevel() (*Level, error) {
 						Config: ImageConfig{
 							ColorModel: object.TileImage.ColorModel(),
 							Width:      float64(object.TileImage.Bounds().Max.X),
-							Height:    float64(object.TileImage.Bounds().Max.Y),
+							Height:     float64(object.TileImage.Bounds().Max.Y),
 						},
 					})
 
@@ -598,7 +608,6 @@ func prepareLevel() (*Level, error) {
 }
 
 func handleCamera(screen *e.Image) {
-
 	frame := frames[unit.Skin+"_"+unit.Action]
 	camera.X = unit.X - (config.width-frame.Config.Width)/2
 	camera.Y = unit.Y - (config.height-frame.Config.Height)/2
@@ -607,12 +616,13 @@ func handleCamera(screen *e.Image) {
 	op.GeoM.Translate(-camera.X, -camera.Y)
 	screen.DrawImage(level.levelImage, op)
 }
+
 var event Event
+
 func handleKeyboard() {
 	etype = idle
-	lastKey = e.KeyEnter
+	lastKey = e.Key0
 	if e.IsKeyPressed(e.KeyA) || e.IsKeyPressed(e.KeyLeft) {
-
 		direction = Direction_left
 		etype = move
 		if lastKey != e.KeyLeft {
@@ -621,7 +631,6 @@ func handleKeyboard() {
 	}
 
 	if e.IsKeyPressed(e.KeyD) || e.IsKeyPressed(e.KeyRight) {
-
 		direction = Direction_right
 		etype = move
 		if lastKey != e.KeyRight {
@@ -630,7 +639,6 @@ func handleKeyboard() {
 	}
 
 	if e.IsKeyPressed(e.KeyW) || e.IsKeyPressed(e.KeyUp) {
-
 		etype = move
 		direction = Direction_up
 		if lastKey != e.KeyUp {
@@ -639,37 +647,22 @@ func handleKeyboard() {
 	}
 
 	if e.IsKeyPressed(e.KeyS) || e.IsKeyPressed(e.KeyDown) {
-
 		direction = Direction_down
 		etype = move
 		if lastKey != e.KeyDown {
 			lastKey = e.KeyDown
 		}
 	}
-	if etype==idle && prevKey != lastKey{
-		event= Event{
+
+	if prevKey != lastKey {
+		event = Event{
 			idunit:    myUnitId,
 			etype:     etype,
 			direction: direction,
 		}
 		eventChan <- event
 		prevKey = lastKey
-		fmt.Println("idle","prevKey",prevKey,"lastKey",lastKey)
-		return
 	}
-	if etype==move && prevKey != lastKey{
-		{
-			event= Event{
-				idunit:    myUnitId,
-				etype:     etype,
-				direction: direction,
-			}
-			eventChan <- event
-			prevKey = lastKey
-			fmt.Println("idle","prevKey",prevKey,"lastKey",lastKey)
-		}
-	}
-
 }
 
 func LoadMapTMX(mapId int) (map[string]Frames, error) {
@@ -808,10 +801,10 @@ func LoadResources() (map[string]Frames, error) {
 			return nil
 		}
 		images[info.Name()] = eimg
-		cfgs[info.Name()]=ImageConfig{
+		cfgs[info.Name()] = ImageConfig{
 			ColorModel: cfg.ColorModel,
 			Width:      float64(cfg.Width),
-			Height:      float64(cfg.Height),
+			Height:     float64(cfg.Height),
 		}
 		f.Close()
 		return nil
@@ -977,11 +970,11 @@ func SearchFloat(a []float64, x float64) bool {
 		return false
 	}
 
-	for i:=0;i< len(a);i++  {
+	for i := 0; i < len(a); i++ {
 		if a[i] == x {
 			return true
 		}
-		if a[i]  > x {
+		if a[i] > x {
 			return false
 		}
 	}
