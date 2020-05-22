@@ -4,6 +4,7 @@ package main
 import (
 	"errors"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
+	"image"
 	"runtime"
 
 	//"github.com/hajimehoshi/ebiten/ebitenutil"
@@ -82,15 +83,20 @@ type Frames struct {
 	images []*e.Image
 	config ImageConfig
 }
-type TmxMap struct{
-	image *e.Image
-	config ImageConfig
-	render.Coll
+type Layer struct {
+	name string
+	render.LayerObjects
+	image   image.Image
+	iconfig ImageConfig
+}
+
+type TmxMap struct {
+	layers       []*Layer
 	objectGroups []*tiled.ObjectGroup
 }
 
 type Point struct {
-	x,y float64
+	x, y float64
 }
 
 type Route struct {
@@ -104,7 +110,7 @@ type Level struct {
 	collisionY map[float64][]float64
 	objects    []*Sprite
 	animations []*Sprite
-	heroroutes [] *Route
+	heroroutes []*Route
 }
 
 type Config struct {
@@ -558,53 +564,118 @@ func main() {
 }
 
 func prepareLevel() (*Level, error) {
-	m, err := LoadMapTMX(10)
+	tmxmap, err := LoadMapTMX(8)
 	if err != nil {
 		return nil, err
 	}
-
-		op := &e.DrawImageOptions{}
-		op.GeoM.Translate(m.config.Width, m.config.Height)
-		img := m.image
-		level := Level{
-			levelImage: img,
-			collisionX: m.Coll.ColmapX,
-			collisionY: m.Coll.ColmapY,
-		}
-
-		for _, object := range m.TileObjects {
-			img, err := e.NewImageFromImage(object.TileImage, e.FilterDefault)
+	level := Level{}
+	for _, layer := range tmxmap.layers {
+		//static level image
+		if strings.Index(layer.name, "bacground") == 0 {
+			op := &e.DrawImageOptions{}
+			op.GeoM.Translate(layer.iconfig.Width, layer.iconfig.Height)
+			img, err := e.NewImageFromImage(layer.image, e.FilterDefault)
 			if err != nil {
-				log.Println(err)
-
+				return nil, err
 			}
-			level.objects = append(level.objects, &Sprite{
-				Frames: []*e.Image{img},
-				op:     &e.DrawImageOptions{},
-				Frame:  0,
-				X:      float64(object.TilePos.Min.X),
-				Y:      float64(object.TilePos.Min.Y),
-				Side:   3,
-				Config: ImageConfig{
-					ColorModel: object.TileImage.ColorModel(),
-					Width:      float64(object.TileImage.Bounds().Max.X),
-					Height:     float64(object.TileImage.Bounds().Max.Y),
-				},
-			})
-
+			err = level.levelImage.DrawImage(img, op)
+			if err != nil {
+				return nil, err
+			}
+		}
+		//collisions
+		for k, v := range layer.XCollision {
+			level.collisionX[k] = append(level.collisionX[k], v...)
+		}
+		for k, v := range layer.YCollision {
+			level.collisionY[k] = append(level.collisionY[k], v...)
+		}
+		//dinamic level objects-images
+		if strings.Index(layer.name, "objects_") >= 0 {
+			for _, object := range layer.TileObjects {
+				img, err := e.NewImageFromImage(object.TileImage, e.FilterDefault)
+				if err != nil {
+					log.Println(err)
+				}
+				level.objects = append(level.objects, &Sprite{
+					Frames: []*e.Image{img},
+					op:     &e.DrawImageOptions{},
+					Frame:  0,
+					X:      float64(object.TilePos.Min.X),
+					Y:      float64(object.TilePos.Min.Y),
+					Side:   3,
+					Config: ImageConfig{
+						ColorModel: object.TileImage.ColorModel(),
+						Width:      float64(object.TileImage.Bounds().Max.X),
+						Height:     float64(object.TileImage.Bounds().Max.Y),
+					},
+				})
+			}
+		}
+		//get heroroutes
+			for _, group := range tmxmap.objectGroups{
+					for _, object := range group.Objects {
+						for _, polygon := range object.Polygons {
+							level.heroroutes = append(level.heroroutes, &Route{
+								name: group.Name,
+								path: func() []Point{
+									ps:=[]Point{}
+									for _, point := range []*tiled.Point(*polygon.Points){
+										ps = append(ps, Point{
+											x: point.X,
+											y: point.Y,
+										})
+									}
+									return ps
+								}(),
+							})
+						}
+					}
+				}
+		//animation
+		if len(layer.Animation) > 0 {
+			for _, animatedTile := range layer.Animation {
+				if len(animatedTile.TileImages) > 0 {
+					eimgs := []*e.Image{}
+					imageConfig := ImageConfig{}
+					imageConfig = ImageConfig{
+						ColorModel: animatedTile.TileImages[0].ColorModel(),
+						Width:      float64(animatedTile.TileImages[0].Bounds().Max.X),
+						Height:     float64(animatedTile.TileImages[0].Bounds().Max.Y),
+					}
+					for _, tileimage := range animatedTile.TileImages {
+						img, err := e.NewImageFromImage(tileimage, e.FilterDefault)
+						if err != nil {
+							log.Println(err)
+						}
+						eimgs = append(eimgs, img)
+					}
+					s := &Sprite{
+						Frames: eimgs,
+						op:     &e.DrawImageOptions{},
+						Frame:  0,
+						X:      float64(animatedTile.TilePos.Min.X),
+						Y:      float64(animatedTile.TilePos.Min.Y),
+						Side:   Direction_right,
+						Config: imageConfig,
+					}
+					level.animations = append(level.animations, s)
+				}
+			}
 		}
 
-		for k, v := range level.collisionX {
-			m := uniqueFloat64(v)
-			sort.Float64s(m)
-			level.collisionX[k] = m
-		}
-		for k, v := range level.collisionY {
-			m := uniqueFloat64(v)
-			sort.Float64s(m)
-			level.collisionY[k] = m
-		}
-		return &level, nil
+	}
+	for k, v := range level.collisionX {
+		m := uniqueFloat64(v)
+		sort.Float64s(m)
+		level.collisionX[k] = m
+	}
+	for k, v := range level.collisionY {
+		m := uniqueFloat64(v)
+		sort.Float64s(m)
+		level.collisionY[k] = m
+	}
+	return &level, nil
 
 	return nil, errors.New("can't load map")
 }
@@ -666,6 +737,7 @@ func handleKeyboard() {
 		prevKey = lastKey
 	}
 }
+
 //sed -Ein "s/([- ,])([0-9]+)\.[0-9]+/\1\2/"g %mapfile
 func LoadMapTMX(mapId int) (TmxMap, error) {
 	var tmxmap TmxMap
@@ -682,7 +754,7 @@ func LoadMapTMX(mapId int) (TmxMap, error) {
 			return nil
 		}
 		// Access individual files by their paths.
-		if !strings.Contains(path, strconv.Itoa(mapId)+`_map.tmx`) { //todo: replace on _map.tmx
+		if !strings.Contains(path, strconv.Itoa(mapId)+`_map_path.tmx`) { //todo: replace on _map.tmx
 			return nil
 		}
 		l := tiled.Loader{FileSystem: statikFS}
@@ -691,42 +763,47 @@ func LoadMapTMX(mapId int) (TmxMap, error) {
 		if err != nil {
 			return err
 		}
-/*		for i, group := range gameMap.ObjectGroups{
-			for i2, object := range group.Objects {
-				for i3, polygon := range object.Polygons {
 
-				}
-			}
-		}*/
+		//fmt.Println(gameMap)
 
+		// You can also render the map to an in-memory image for direct
+		// use with the default Renderer, or by making your own.
 		renderer, err := render.NewRenderer(gameMap)
 		if err != nil {
 			fmt.Println("Error parsing map")
 			return nil
 		}
 
-		collision, err := renderer.RenderVisibleLayers()//todo: return collision tileobjects in go-tiled
-		if err != nil {
-			return err
+		for i, layer := range gameMap.Layers {
+			lobjects, err := renderer.RenderLayer(i)
+
+			if err != nil {
+				return err
+			}
+			for k, v := range lobjects.XCollision {
+				m := uniqueFloat64(v)
+				sort.Float64s(m)
+				lobjects.XCollision[k] = m
+			}
+			for k, v := range lobjects.YCollision {
+				m := uniqueFloat64(v)
+				sort.Float64s(m)
+				lobjects.YCollision[k] = m
+			}
+
+			tmxmap.layers = append(tmxmap.layers, &Layer{
+				name:         layer.Name,
+				LayerObjects: lobjects,
+				image:        renderer.Result,
+				iconfig: ImageConfig{
+					ColorModel: renderer.Result.ColorModel(),
+					Width:      float64(renderer.Result.Bounds().Max.X),
+					Height:     float64(renderer.Result.Bounds().Max.Y),
+				},
+			})
 		}
-		_, err= renderer.RenderLayer(0)
-		if err != nil {
-			return err
-		}
-		img, err := e.NewImageFromImage(renderer.Result, e.FilterDefault)
-		if err != nil {
-			return err
-		}
-		tmxmap=TmxMap{
-			image:        img,
-			Coll:         collision,
-			objectGroups: gameMap.ObjectGroups,
-			config: ImageConfig{
-				ColorModel: img.ColorModel(),
-				Width:      float64(img.Bounds().Max.X),
-				Height:     float64(img.Bounds().Max.Y),
-			},
-		}
+		// Get a reference to the Renderer's output, an image.NRGBA struct.
+
 		return nil
 	})
 	return tmxmap, err
