@@ -8,7 +8,7 @@ require (
 	github.com/hajimehoshi/ebiten v1.11.1
 	github.com/rakyll/statik v0.1.7
 	github.com/satori/go.uuid v1.2.0
-	github.com/shipa988/go-tiled v1.0.2
+	github.com/shipa988/go-tiled v1.0.4
 	github.com/stretchr/testify v1.5.1 // indirect
 	golang.org/x/exp v0.0.0-20200513190911-00229845015e // indirect
 	golang.org/x/image v0.0.0-20200430140353-33d19683fad8 // indirect

@@ -80,8 +80,22 @@ type Direction int
 
 type Frames struct {
 	images []*e.Image
+	config ImageConfig
+}
+type TmxMap struct{
+	image *e.Image
+	config ImageConfig
 	render.Coll
-	Config ImageConfig
+	objectGroups []*tiled.ObjectGroup
+}
+
+type Point struct {
+	x,y float64
+}
+
+type Route struct {
+	name string
+	path []Point
 }
 
 type Level struct {
@@ -89,6 +103,8 @@ type Level struct {
 	collisionX map[float64][]float64
 	collisionY map[float64][]float64
 	objects    []*Sprite
+	animations []*Sprite
+	heroroutes [] *Route
 }
 
 type Config struct {
@@ -279,9 +295,9 @@ func (u *Units) Update(donech chan struct{}, wg *sync.WaitGroup) {
 						player.Action = UnitActionMove
 						switch player.Direction {
 						case Direction_right:
-							c, ok := level.collisionX[(player.X+1)+frame.Config.Width]
+							c, ok := level.collisionX[(player.X+1)+frame.config.Width]
 							if ok {
-								if SearchFloat(c, (player.Y)+frame.Config.Height) { //found coordinate
+								if SearchFloat(c, (player.Y)+frame.config.Height) { //found coordinate
 									ismove = false
 									break
 								}
@@ -294,7 +310,7 @@ func (u *Units) Update(donech chan struct{}, wg *sync.WaitGroup) {
 						case Direction_left:
 							c, ok := level.collisionX[(player.X - 1)]
 							if ok {
-								if SearchFloat(c, (player.Y)+frame.Config.Height) { //found coordinate
+								if SearchFloat(c, (player.Y)+frame.config.Height) { //found coordinate
 									ismove = false
 									break
 								}
@@ -305,9 +321,9 @@ func (u *Units) Update(donech chan struct{}, wg *sync.WaitGroup) {
 								sprite.X -= player.Speed
 							}
 						case Direction_up:
-							c, ok := level.collisionY[(player.Y-1)+frame.Config.Height]
+							c, ok := level.collisionY[(player.Y-1)+frame.config.Height]
 							if ok {
-								for x := (player.X); x < (player.X)+frame.Config.Width; x++ {
+								for x := (player.X); x < (player.X)+frame.config.Width; x++ {
 									if SearchFloat(c, x) { //found coordinate Значит есть пересечение по оси х
 										ismove = false
 										break
@@ -320,9 +336,9 @@ func (u *Units) Update(donech chan struct{}, wg *sync.WaitGroup) {
 							}
 
 						case Direction_down:
-							c, ok := level.collisionY[(player.Y+1)+frame.Config.Height]
+							c, ok := level.collisionY[(player.Y+1)+frame.config.Height]
 							if ok {
-								for x := (player.X); x < (player.X)+frame.Config.Width; x++ {
+								for x := (player.X); x < (player.X)+frame.config.Width; x++ {
 									if SearchFloat(c, x) { //found coordinate
 										ismove = false
 										break
@@ -459,7 +475,7 @@ func main() {
 		X:      unit.X - 1,
 		Y:      unit.Y,
 		Side:   unit.Side,
-		Config: frames[unit.Skin+"_"+unit.Action].Config,
+		Config: frames[unit.Skin+"_"+unit.Action].config,
 	}
 	camera = &Camera{
 		X:       unit.X,
@@ -502,7 +518,7 @@ func main() {
 					X:      otherUnit.X - 1,
 					Y:      otherUnit.Y,
 					Side:   otherUnit.Side,
-					Config: frames[otherUnit.Skin+"_"+otherUnit.Action].Config,
+					Config: frames[otherUnit.Skin+"_"+otherUnit.Action].config,
 				}
 				units.Add(otherUnitId, otherSprite, otherUnit)
 
@@ -542,56 +558,40 @@ func main() {
 }
 
 func prepareLevel() (*Level, error) {
-	l, err := LoadMapTMX(8)
+	m, err := LoadMapTMX(10)
 	if err != nil {
 		return nil, err
 	}
-	//all,ok:=l["background"]
-	//all,ok:=l["co"]
-	all, ok := l["all_layers"]
-	//obj, objok := l["testwalls"]
 
-	if ok {
 		op := &e.DrawImageOptions{}
-		op.GeoM.Translate(all.Config.Width, all.Config.Height)
-		img := all.images[0]
+		op.GeoM.Translate(m.config.Width, m.config.Height)
+		img := m.image
 		level := Level{
 			levelImage: img,
-			collisionX: all.Coll.ColmapX,
-			collisionY: all.Coll.ColmapY,
+			collisionX: m.Coll.ColmapX,
+			collisionY: m.Coll.ColmapY,
 		}
-		for name, layer := range l {
-			for k, v := range layer.Coll.ColmapX {
-				level.collisionX[k] = append(level.collisionX[k], v...)
-			}
-			for k, v := range layer.Coll.ColmapY {
-				level.collisionY[k] = append(level.collisionY[k], v...)
-			}
 
-			if strings.Index(name, "objects_") >= 0 {
-				for _, object := range layer.TileObjects {
-					img, err := e.NewImageFromImage(object.TileImage, e.FilterDefault)
-					if err != nil {
-						log.Println(err)
-
-					}
-					level.objects = append(level.objects, &Sprite{
-						Frames: []*e.Image{img},
-						op:     &e.DrawImageOptions{},
-						Frame:  0,
-						X:      float64(object.TilePos.Min.X),
-						Y:      float64(object.TilePos.Min.Y),
-						Side:   3,
-						Config: ImageConfig{
-							ColorModel: object.TileImage.ColorModel(),
-							Width:      float64(object.TileImage.Bounds().Max.X),
-							Height:     float64(object.TileImage.Bounds().Max.Y),
-						},
-					})
-
-				}
+		for _, object := range m.TileObjects {
+			img, err := e.NewImageFromImage(object.TileImage, e.FilterDefault)
+			if err != nil {
+				log.Println(err)
 
 			}
+			level.objects = append(level.objects, &Sprite{
+				Frames: []*e.Image{img},
+				op:     &e.DrawImageOptions{},
+				Frame:  0,
+				X:      float64(object.TilePos.Min.X),
+				Y:      float64(object.TilePos.Min.Y),
+				Side:   3,
+				Config: ImageConfig{
+					ColorModel: object.TileImage.ColorModel(),
+					Width:      float64(object.TileImage.Bounds().Max.X),
+					Height:     float64(object.TileImage.Bounds().Max.Y),
+				},
+			})
+
 		}
 
 		for k, v := range level.collisionX {
@@ -605,15 +605,14 @@ func prepareLevel() (*Level, error) {
 			level.collisionY[k] = m
 		}
 		return &level, nil
-	}
 
 	return nil, errors.New("can't load map")
 }
 
 func handleCamera(screen *e.Image) {
 	frame := frames[unit.Skin+"_"+unit.Action]
-	camera.X = unit.X - (config.width-frame.Config.Width)/2
-	camera.Y = unit.Y - (config.height-frame.Config.Height)/2
+	camera.X = unit.X - (config.width-frame.config.Width)/2
+	camera.Y = unit.Y - (config.height-frame.config.Height)/2
 
 	op := &e.DrawImageOptions{}
 	op.GeoM.Translate(-camera.X, -camera.Y)
@@ -668,8 +667,8 @@ func handleKeyboard() {
 	}
 }
 //sed -Ein "s/([- ,])([0-9]+)\.[0-9]+/\1\2/"g %mapfile
-func LoadMapTMX(mapId int) (map[string]Frames, error) {
-	layers := map[string]Frames{}
+func LoadMapTMX(mapId int) (TmxMap, error) {
+	var tmxmap TmxMap
 	statikFS, err := fs.New()
 	if err != nil {
 		log.Fatal(err)
@@ -683,7 +682,7 @@ func LoadMapTMX(mapId int) (map[string]Frames, error) {
 			return nil
 		}
 		// Access individual files by their paths.
-		if !strings.Contains(path, strconv.Itoa(mapId)+`_map_path.tmx`) { //todo: replace on _map.tmx
+		if !strings.Contains(path, strconv.Itoa(mapId)+`_map.tmx`) { //todo: replace on _map.tmx
 			return nil
 		}
 		l := tiled.Loader{FileSystem: statikFS}
@@ -692,76 +691,45 @@ func LoadMapTMX(mapId int) (map[string]Frames, error) {
 		if err != nil {
 			return err
 		}
+/*		for i, group := range gameMap.ObjectGroups{
+			for i2, object := range group.Objects {
+				for i3, polygon := range object.Polygons {
 
-		//fmt.Println(gameMap)
+				}
+			}
+		}*/
 
-		// You can also render the map to an in-memory image for direct
-		// use with the default Renderer, or by making your own.
 		renderer, err := render.NewRenderer(gameMap)
 		if err != nil {
 			fmt.Println("Error parsing map")
 			return nil
 		}
 
-		for i, layer := range gameMap.Layers {
-			name := layer.Name
-			collision, err := renderer.RenderLayer(i)
-
-			if err != nil {
-				return err
-			}
-			for k, v := range collision.ColmapX {
-				m := uniqueFloat64(v)
-				sort.Float64s(m)
-				collision.ColmapX[k] = m
-			}
-			for k, v := range collision.ColmapY {
-				m := uniqueFloat64(v)
-				sort.Float64s(m)
-				collision.ColmapY[k] = m
-			}
-
-			img, _ := e.NewImageFromImage(renderer.Result, e.FilterDefault)
-			layers[name] = Frames{
-				images: []*e.Image{img},
-				Coll:   collision,
-				Config: ImageConfig{
-					ColorModel: img.ColorModel(),
-					Width:      float64(img.Bounds().Max.X),
-					Height:     float64(img.Bounds().Max.Y),
-				},
-			}
-		}
-		collision, err := renderer.RenderLayer(0)
+		collision, err := renderer.RenderVisibleLayers()//todo: return collision tileobjects in go-tiled
 		if err != nil {
 			return err
 		}
-		for k, v := range collision.ColmapX {
-			m := uniqueFloat64(v)
-			sort.Float64s(m)
-			collision.ColmapX[k] = m
+		_, err= renderer.RenderLayer(0)
+		if err != nil {
+			return err
 		}
-		for k, v := range collision.ColmapY {
-			m := uniqueFloat64(v)
-			sort.Float64s(m)
-			collision.ColmapY[k] = m
+		img, err := e.NewImageFromImage(renderer.Result, e.FilterDefault)
+		if err != nil {
+			return err
 		}
-		img, _ := e.NewImageFromImage(renderer.Result, e.FilterDefault)
-		layers["all_layers"] = Frames{
-			images: []*e.Image{img},
-			Coll:   collision,
-			Config: ImageConfig{
+		tmxmap=TmxMap{
+			image:        img,
+			Coll:         collision,
+			objectGroups: gameMap.ObjectGroups,
+			config: ImageConfig{
 				ColorModel: img.ColorModel(),
 				Width:      float64(img.Bounds().Max.X),
 				Height:     float64(img.Bounds().Max.Y),
 			},
 		}
-
-		// Get a reference to the Renderer's output, an image.NRGBA struct.
-
 		return nil
 	})
-	return layers, err
+	return tmxmap, err
 }
 
 func LoadResources() (map[string]Frames, error) {
@@ -819,7 +787,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["big_demon_idle_anim_f2.png"],
 			images["big_demon_idle_anim_f3.png"],
 		},
-		Config: cfgs["big_demon_idle_anim_f0.png"],
+		config: cfgs["big_demon_idle_anim_f0.png"],
 	}
 	sprites["big_demon_run"] = Frames{
 		images: []*e.Image{
@@ -828,7 +796,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["big_demon_run_anim_f2.png"],
 			images["big_demon_run_anim_f3.png"],
 		},
-		Config: cfgs["big_demon_run_anim_f0.png"],
+		config: cfgs["big_demon_run_anim_f0.png"],
 	}
 	sprites["goblin_idle"] = Frames{
 		images: []*e.Image{
@@ -837,7 +805,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["goblin_idle_anim_f2.png"],
 			images["goblin_idle_anim_f3.png"],
 		},
-		Config: cfgs["goblin_idle_anim_f0.png"],
+		config: cfgs["goblin_idle_anim_f0.png"],
 	}
 	sprites["goblin_run"] = Frames{
 		images: []*e.Image{
@@ -846,7 +814,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["goblin_run_anim_f2.png"],
 			images["goblin_run_anim_f3.png"],
 		},
-		Config: cfgs["goblin_run_anim_f0.png"],
+		config: cfgs["goblin_run_anim_f0.png"],
 	}
 	sprites["big_zombie_idle"] = Frames{
 		images: []*e.Image{
@@ -855,7 +823,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["big_zombie_idle_anim_f2.png"],
 			images["big_zombie_idle_anim_f3.png"],
 		},
-		Config: cfgs["big_zombie_idle_anim_f0.png"],
+		config: cfgs["big_zombie_idle_anim_f0.png"],
 	}
 	sprites["big_zombie_run"] = Frames{
 		images: []*e.Image{
@@ -864,7 +832,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["big_zombie_run_anim_f2.png"],
 			images["big_zombie_run_anim_f3.png"],
 		},
-		Config: cfgs["big_zombie_run_anim_f0.png"],
+		config: cfgs["big_zombie_run_anim_f0.png"],
 	}
 	sprites["chort_idle"] = Frames{
 		images: []*e.Image{
@@ -873,7 +841,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["chort_idle_anim_f2.png"],
 			images["chort_idle_anim_f3.png"],
 		},
-		Config: cfgs["chort_idle_anim_f0.png"],
+		config: cfgs["chort_idle_anim_f0.png"],
 	}
 	sprites["chort_run"] = Frames{
 		images: []*e.Image{
@@ -882,7 +850,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["chort_run_anim_f2.png"],
 			images["chort_run_anim_f3.png"],
 		},
-		Config: cfgs["chort_run_anim_f0.png"],
+		config: cfgs["chort_run_anim_f0.png"],
 	}
 	sprites["elf_f_idle"] = Frames{
 		images: []*e.Image{
@@ -891,7 +859,7 @@ func LoadResources() (map[string]Frames, error) {
 			images["elf_f_idle_anim_f2.png"],
 			images["elf_f_idle_anim_f3.png"],
 		},
-		Config: cfgs["elf_f_idle_anim_f0.png"],
+		config: cfgs["elf_f_idle_anim_f0.png"],
 	}
 	sprites["elf_f_run"] = Frames{
 		images: []*e.Image{
@@ -900,47 +868,47 @@ func LoadResources() (map[string]Frames, error) {
 			images["elf_f_run_anim_f2.png"],
 			images["elf_f_run_anim_f3.png"],
 		},
-		Config: cfgs["elf_f_run_anim_f0.png"],
+		config: cfgs["elf_f_run_anim_f0.png"],
 	}
 	sprites["floor_1"] = Frames{
 		images: []*e.Image{images["floor_1.png"]},
-		Config: cfgs["floor_1.png"],
+		config: cfgs["floor_1.png"],
 	}
 	sprites["floor_2"] = Frames{
 		images: []*e.Image{images["floor_2.png"]},
-		Config: cfgs["floor_2.png"],
+		config: cfgs["floor_2.png"],
 	}
 	sprites["floor_3"] = Frames{
 		images: []*e.Image{images["floor_3.png"]},
-		Config: cfgs["floor_3.png"],
+		config: cfgs["floor_3.png"],
 	}
 	sprites["floor_4"] = Frames{
 		images: []*e.Image{images["floor_4.png"]},
-		Config: cfgs["floor_4.png"],
+		config: cfgs["floor_4.png"],
 	}
 	sprites["floor_5"] = Frames{
 		images: []*e.Image{images["floor_5.png"]},
-		Config: cfgs["floor_5.png"],
+		config: cfgs["floor_5.png"],
 	}
 	sprites["floor_6"] = Frames{
 		images: []*e.Image{images["floor_6.png"]},
-		Config: cfgs["floor_6.png"],
+		config: cfgs["floor_6.png"],
 	}
 	sprites["floor_7"] = Frames{
 		images: []*e.Image{images["floor_7.png"]},
-		Config: cfgs["floor_7.png"],
+		config: cfgs["floor_7.png"],
 	}
 	sprites["floor_8"] = Frames{
 		images: []*e.Image{images["floor_8.png"]},
-		Config: cfgs["floor_8.png"],
+		config: cfgs["floor_8.png"],
 	}
 	sprites["wall_side_front_left"] = Frames{
 		images: []*e.Image{images["wall_side_front_left.png"]},
-		Config: cfgs["wall_side_front_left.png"],
+		config: cfgs["wall_side_front_left.png"],
 	}
 	sprites["wall_side_front_right"] = Frames{
 		images: []*e.Image{images["wall_side_front_right.png"]},
-		Config: cfgs["wall_side_front_right.png"],
+		config: cfgs["wall_side_front_right.png"],
 	}
 	return sprites, nil
 }
