@@ -46,8 +46,8 @@ const (
 const (
 	Direction_left  Direction = 0
 	Direction_right Direction = iota
-	Direction_up
-	Direction_down
+	Direction_up              //is up direction for units and vertical plane for animated sprite (object)
+	Direction_down            //is down direction for units and gorizontal plane for animated sprite (object)
 )
 
 var config *Config
@@ -91,8 +91,9 @@ type Layer struct {
 }
 
 type TmxMap struct {
-	layers       []*Layer
-	objectGroups []*tiled.ObjectGroup
+	layers        []*Layer
+	objectGroups  []*tiled.ObjectGroup
+	width, height int
 }
 
 type Point struct {
@@ -147,7 +148,7 @@ type Sprite struct {
 	Frame  int
 	X      float64
 	Y      float64
-	Side   Direction
+	Side   Direction //right-left-is direction up-down is plane
 	Config ImageConfig
 }
 
@@ -230,6 +231,13 @@ func (u *Units) GetSprite(id uuid.UUID) *Sprite {
 	return nil
 }
 
+//sortsprites sorting sprite
+var sortsprites = func(i, j int) bool {
+	depth1 := sprites[i].Y + sprites[i].Config.Height
+	depth2 := sprites[j].Y + sprites[j].Config.Height
+	return depth1 < depth2
+}
+
 func (u *Units) HandleEvent(eventChan chan Event, donech chan struct{}, wg *sync.WaitGroup) {
 	wg.Add(1)
 	func() {
@@ -266,11 +274,7 @@ func (u *Units) Add(uuid uuid.UUID, sp *Sprite, un *Unit) {
 		unit:   un,
 	}
 	sprites = append(sprites, sp)
-	sort.Slice(sprites, func(i, j int) bool {
-		depth1 := sprites[i].Y + sprites[i].Config.Height
-		depth2 := sprites[j].Y + sprites[j].Config.Height
-		return depth1 < depth2
-	})
+	sort.Slice(sprites, sortsprites)
 
 	u.mx.Unlock()
 }
@@ -280,11 +284,7 @@ func (u *Units) Update(donech chan struct{}, wg *sync.WaitGroup) {
 	func() {
 		defer wg.Done()
 		var ismove bool
-		sortsprites := func(i, j int) bool {
-			depth1 := sprites[i].Y + sprites[i].Config.Height
-			depth2 := sprites[j].Y + sprites[j].Config.Height
-			return depth1 < depth2
-		}
+
 		ticker := time.NewTicker(time.Second / 60)
 		for {
 			select {
@@ -379,7 +379,16 @@ func Update(screen *e.Image) error {
 	handleCamera(screen)
 
 	frame++
-
+	for _, sprite := range level.animations {
+		op := &e.DrawImageOptions{}
+		op.GeoM.Reset()
+		op.GeoM.Translate(sprite.X-camera.X, sprite.Y-camera.Y)
+		err := screen.DrawImage(sprite.Frames[(frame/10+sprite.Frame)%len(sprite.Frames)], op)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+	}
 	for _, sprite := range sprites {
 		op := &e.DrawImageOptions{}
 		op.GeoM.Reset()
@@ -489,6 +498,18 @@ func main() {
 		Padding: 30,
 	}
 	sprites = append(sprites, level.objects...)
+	verticalSprites := []*Sprite{}
+	gorizontalSprites := []*Sprite{}
+	for _, animatedSprite := range level.animations {
+		if animatedSprite.Side == Direction_down { //is floor plane gorizontal sprite
+			gorizontalSprites = append(gorizontalSprites, animatedSprite)
+
+		} else {
+			verticalSprites = append(verticalSprites, animatedSprite)
+		}
+	}
+	sprites = append(sprites, verticalSprites...)
+	level.animations = gorizontalSprites
 
 	units.Add(myUnitId, sprite, unit)
 	go units.HandleEvent(eventChan, done, wg)
@@ -564,21 +585,36 @@ func main() {
 }
 
 func prepareLevel() (*Level, error) {
-	tmxmap, err := LoadMapTMX(8)
+	tmxmap, err := LoadMapTMX(10)
 	if err != nil {
 		return nil, err
 	}
-	level := Level{}
+	levelImage, err := e.NewImage(tmxmap.width, tmxmap.height, e.FilterDefault)
+	if err != nil {
+		return nil, err
+	}
+	level := Level{
+		levelImage: levelImage,
+		collisionX: map[float64][]float64{},
+		collisionY: map[float64][]float64{},
+		objects:    nil,
+		animations: nil,
+		heroroutes: nil,
+	}
+
+	level.collisionX = map[float64][]float64{}
+	level.collisionX = map[float64][]float64{}
 	for _, layer := range tmxmap.layers {
 		//static level image
 		if strings.Index(layer.name, "bacground") == 0 {
 			op := &e.DrawImageOptions{}
 			op.GeoM.Translate(layer.iconfig.Width, layer.iconfig.Height)
-			img, err := e.NewImageFromImage(layer.image, e.FilterDefault)
+			imgfloor, err := e.NewImageFromImage(layer.image, e.FilterDefault)
 			if err != nil {
 				return nil, err
 			}
-			err = level.levelImage.DrawImage(img, op)
+			level.levelImage = imgfloor
+			//err = level.levelImage.DrawImage(img, op)
 			if err != nil {
 				return nil, err
 			}
@@ -613,29 +649,30 @@ func prepareLevel() (*Level, error) {
 			}
 		}
 		//get heroroutes
-			for _, group := range tmxmap.objectGroups{
-					for _, object := range group.Objects {
-						for _, polygon := range object.Polygons {
-							level.heroroutes = append(level.heroroutes, &Route{
-								name: group.Name,
-								path: func() []Point{
-									ps:=[]Point{}
-									for _, point := range []*tiled.Point(*polygon.Points){
-										ps = append(ps, Point{
-											x: point.X,
-											y: point.Y,
-										})
-									}
-									return ps
-								}(),
-							})
-						}
-					}
+		for _, group := range tmxmap.objectGroups {
+			for _, object := range group.Objects {
+				for _, polygon := range object.Polygons {
+					level.heroroutes = append(level.heroroutes, &Route{
+						name: group.Name,
+						path: func() []Point {
+							ps := []Point{}
+							for _, point := range []*tiled.Point(*polygon.Points) {
+								ps = append(ps, Point{
+									x: point.X,
+									y: point.Y,
+								})
+							}
+							return ps
+						}(),
+					})
 				}
+			}
+		}
 		//animation
 		if len(layer.Animation) > 0 {
 			for _, animatedTile := range layer.Animation {
 				if len(animatedTile.TileImages) > 0 {
+
 					eimgs := []*e.Image{}
 					imageConfig := ImageConfig{}
 					imageConfig = ImageConfig{
@@ -643,6 +680,7 @@ func prepareLevel() (*Level, error) {
 						Width:      float64(animatedTile.TileImages[0].Bounds().Max.X),
 						Height:     float64(animatedTile.TileImages[0].Bounds().Max.Y),
 					}
+
 					for _, tileimage := range animatedTile.TileImages {
 						img, err := e.NewImageFromImage(tileimage, e.FilterDefault)
 						if err != nil {
@@ -650,13 +688,18 @@ func prepareLevel() (*Level, error) {
 						}
 						eimgs = append(eimgs, img)
 					}
+
+					direction := Direction_up
+					if animatedTile.TilePlane == "gor" {
+						direction = Direction_down //it is gorizontal plane-floor
+					}
 					s := &Sprite{
 						Frames: eimgs,
 						op:     &e.DrawImageOptions{},
 						Frame:  0,
 						X:      float64(animatedTile.TilePos.Min.X),
 						Y:      float64(animatedTile.TilePos.Min.Y),
-						Side:   Direction_right,
+						Side:   direction,
 						Config: imageConfig,
 					}
 					level.animations = append(level.animations, s)
@@ -754,12 +797,13 @@ func LoadMapTMX(mapId int) (TmxMap, error) {
 			return nil
 		}
 		// Access individual files by their paths.
-		if !strings.Contains(path, strconv.Itoa(mapId)+`_map_path.tmx`) { //todo: replace on _map.tmx
+		if !strings.Contains(path, strconv.Itoa(mapId)+`_map.tmx`) { //todo: replace on _map.tmx
 			return nil
 		}
 		l := tiled.Loader{FileSystem: statikFS}
 		gameMap, err := l.LoadFromFile(path)
-
+		tmxmap.width = gameMap.Width
+		tmxmap.height = gameMap.Height
 		if err != nil {
 			return err
 		}
@@ -801,6 +845,8 @@ func LoadMapTMX(mapId int) (TmxMap, error) {
 					Height:     float64(renderer.Result.Bounds().Max.Y),
 				},
 			})
+			tmxmap.objectGroups = gameMap.ObjectGroups
+			renderer.Clear()
 		}
 		// Get a reference to the Renderer's output, an image.NRGBA struct.
 
